@@ -481,7 +481,7 @@ def write_html_report(
     location_display_name: str | None = None,
     location_attribution: str | None = None,
 ) -> Path:
-    'Write the V0.4.1 report with first-class maps, layered evidence and detector provenance.'
+    'Write the V0.4.2 report with first-class maps, layered evidence and detector provenance.'
     destination.parent.mkdir(parents=True, exist_ok=True)
     candidates = candidates or []
     monument_extents = monument_extents or []

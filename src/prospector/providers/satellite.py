@@ -166,7 +166,8 @@ class SatelliteProvider:
                     max(1, int(window.width)),
                     max(1, int(window.height)),
                 )
-                data = dataset.read(1, window=window, boundless=True, masked=True).filled(np.nan).astype("float32")
+                masked_data = dataset.read(1, window=window, boundless=True, masked=True)
+                data = masked_data.astype("float32").filled(np.nan)
                 transform = dataset.window_transform(window)
                 return data, transform, str(dataset.crs)
 
@@ -206,8 +207,8 @@ class SatelliteProvider:
                     max(1, int(window.width)),
                     max(1, int(window.height)),
                 )
-                data = dataset.read(indexes=[1, 2, 3], window=window, boundless=True, masked=True)
-                data = data.filled(np.nan).astype("float32")
+                masked_data = dataset.read(indexes=[1, 2, 3], window=window, boundless=True, masked=True)
+                data = masked_data.astype("float32").filled(np.nan)
                 return data, dataset.window_transform(window), str(dataset.crs)
 
     @staticmethod

@@ -13,3 +13,10 @@ def test_module_entry_point_exists() -> None:
     root = Path(__file__).parents[1]
     text = (root / "src/prospector/__main__.py").read_text(encoding="utf-8")
     assert 'from prospector.cli import app' in text
+
+
+def test_gitignore_covers_environment_files_and_virtualenvs():
+    root = Path(__file__).parents[1]
+    text = (root / ".gitignore").read_text(encoding="utf-8")
+    for pattern in (".env", ".env.*", "*.env", "env/", ".venv/"):
+        assert pattern in text

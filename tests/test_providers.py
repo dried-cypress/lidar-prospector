@@ -275,6 +275,48 @@ def test_location_provider_selects_english_name_and_caches_result(tmp_path: Path
     assert result.metadata["attribution"] == "© OpenStreetMap contributors"
 
 
+def test_satellite_read_window_converts_masked_uint16_before_filling(monkeypatch):
+    import contextlib
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+    from prospector.providers.satellite import SatelliteProvider
+
+    provider = SatelliteProvider(None)  # type: ignore[arg-type]
+    transform_value = from_origin(0, 10, 1, 1)
+
+    class FakeDataset:
+        crs = "EPSG:27700"
+        transform = transform_value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, *args, **kwargs):
+            data = np.array([[100, 200], [300, 400]], dtype="uint16")
+            mask = np.array([[False, True], [False, False]])
+            return np.ma.array(data, mask=mask)
+
+        def window_transform(self, window):
+            return self.transform
+
+    monkeypatch.setattr(provider, "_signed_href", lambda href: href)
+    monkeypatch.setattr(rasterio, "open", lambda *_a, **_k: FakeDataset())
+    monkeypatch.setattr(rasterio, "Env", lambda **_kwargs: contextlib.nullcontext())
+
+    data, _transform, _crs = provider._read_asset_window(
+        "scene.tif",
+        (0, 8, 2, 10),
+        (2, 2),
+    )
+    assert data.dtype == np.float32
+    assert np.isnan(data[0, 1])
+    assert data[1, 1] == 400.0
+
+
 def test_satellite_visual_preview_uses_single_signed_asset(monkeypatch, tmp_path: Path) -> None:
     import warnings
     from rasterio.errors import NotGeoreferencedWarning

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2 — Sentinel preview and OS API documentation
+
+- Fix Sentinel-2 masked `uint16` raster handling by converting masked source arrays to floating point before applying NaN nodata values.
+- Ensure a successful Sentinel-2 preview is exposed as the selectable **Sentinel-2** base layer in the interactive evidence map.
+- Retain single-asset `visual` preview preference and 429 retry handling to minimise Planetary Computer signing requests.
+- Document OS Data Hub signup, the OS Features API / OS Open Zoomstack context source, required API-key environment variables, and installation configuration.
+- Ignore local `.env`, `*.env`, `env/` and virtual-environment files in Git.
+
 ## 0.4.1 — satellite/install hardening
 
 - Added a deterministic project-local installer using `.venv/bin/python` and `pip --no-user`.
