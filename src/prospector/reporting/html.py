@@ -404,7 +404,7 @@ def _layered_map(
     height: int,
     viewport: tuple[float, float, float, float, int, int],
 ) -> str:
-    """Build one local HTML map with switchable base imagery and vector overlays."""
+    """Build a layered map whose controls sit above, never over, the image."""
     available = [(key, label, _relative_src(destination, path)) for key, label, path in bases]
     available = [(key, label, src) for key, label, src in available if src]
     if not available:
@@ -423,18 +423,24 @@ def _layered_map(
             f'<button type="button" class="base-button{" active" if active else ""}" data-base-button="{_escape(key)}">{_escape(label)}</button>'
         )
 
-    svg_style = (
-        f'left:{left:.6f}%;top:{top:.6f}%;width:{width_pct:.6f}%;height:{height_pct:.6f}%;'
-    )
+    svg_style = f'left:{left:.6f}%;top:{top:.6f}%;width:{width_pct:.6f}%;height:{height_pct:.6f}%;'
     return f"""
-<div class="layer-map" style="aspect-ratio:{width}/{height}">
-<div class="layer-controls"><div class="control-group"><strong>Base</strong>{"".join(buttons)}</div>
-<div class="control-group"><strong>Overlays</strong><label><input type="checkbox" data-toggle-overlay="he" checked> Historic England</label>
-<label><input type="checkbox" data-toggle-overlay="candidates" checked> Anomaly candidates</label></div></div>
-<div class="layer-canvas">{"".join(images)}
-<svg class="layer-svg" style="{svg_style}" viewBox="0 0 {viewport_width} {viewport_height}" preserveAspectRatio="none" aria-hidden="true">
-<g data-overlay="he">{he_svg}</g><g data-overlay="candidates">{candidate_svg}</g>
-</svg></div></div>
+<div class="layer-map">
+  <details class="layer-controls" open>
+    <summary><span class="menu-glyph">☰</span> Layers &amp; base imagery</summary>
+    <div class="layer-control-body">
+      <div class="control-group"><strong>Base</strong>{"".join(buttons)}</div>
+      <div class="control-group"><strong>Overlays</strong><label><input type="checkbox" data-toggle-overlay="he" checked> Historic England</label>
+      <label><input type="checkbox" data-toggle-overlay="candidates" checked> Anomaly candidates</label></div>
+    </div>
+  </details>
+  <div class="layer-canvas" style="aspect-ratio:{width}/{height}">
+    {"".join(images)}
+    <svg class="layer-svg" style="{svg_style}" viewBox="0 0 {viewport_width} {viewport_height}" preserveAspectRatio="none" aria-hidden="true">
+      <g data-overlay="he">{he_svg}</g><g data-overlay="candidates">{candidate_svg}</g>
+    </svg>
+  </div>
+</div>
 """
 
 
@@ -471,8 +477,11 @@ def write_html_report(
     satellite_search_path: Path | None = None,
     lidar_base_path: Path | None = None,
     anomaly_base_path: Path | None = None,
+    location_name: str | None = None,
+    location_display_name: str | None = None,
+    location_attribution: str | None = None,
 ) -> Path:
-    'Write the V0.3.7 report with first-class PNG maps and switchable evidence layers.'
+    'Write the V0.4.0 report with first-class maps, layered evidence and detector provenance.'
     destination.parent.mkdir(parents=True, exist_ok=True)
     candidates = candidates or []
     monument_extents = monument_extents or []
@@ -553,8 +562,9 @@ def write_html_report(
         f'<td><a class="view-link" href="#map-candidate-{i}" data-focus-candidate="{i}">View on map ↗</a></td>'
         f'<td><strong>{_escape(c.classification)}</strong></td>'
         f'<td>{c.score:.1f}</td><td>{c.lidar_score:.1f}</td><td>{c.persistence_score:.1f}</td>'
-        f'<td>{c.morphology_score:.1f}</td><td>{c.linear_score:.1f}</td><td>{c.modern_penalty:.1f}</td>'
-        f'<td>{c.satellite_support:.1f}</td><td>{c.he_similarity:.1f}</td>'
+        f'<td>{c.morphology_score:.1f}</td><td>{c.linear_score:.1f}</td><td>{c.ring_score:.1f}</td>'
+        f'<td>{c.ridge_valley_score:.1f}</td><td>{c.terrain_novelty_score:.1f}</td><td>{c.texture_score:.1f}</td>'
+        f'<td>{c.modern_penalty:.1f}</td><td>{c.satellite_support:.1f}</td><td>{c.he_similarity:.1f}</td>'
         f'<td>{c.relief_m:.2f} m</td><td>{c.strongest_scale_m:g} m</td><td>{c.area_m2:,.1f} m²</td>'
         f'<td>{_escape("; ".join(c.reasons) or "—")}</td></tr>'
         for i, c in enumerate(candidates, 1)
@@ -570,6 +580,18 @@ def write_html_report(
                 context_types.append(context_type)
     modern_count = int(modern_summary.get("modern_feature_count", 0) or 0)
     satellite_meta = modern_summary.get("satellite") or (anomaly_metadata or {}).get("satellite_context", {}) or {}
+    diagnostic_rasters = (anomaly_metadata or {}).get("diagnostic_rasters", {}) or {}
+    diagnostic_links = "".join(
+        f'<li>{_escape(label.replace("_", " ").title())}: {_relative_link(destination, Path(path))}</li>'
+        for label, path in diagnostic_rasters.items()
+        if path
+    )
+    diagnostic_html = (
+        f'<details class="diagnostic-details"><summary>Open detector diagnostic layers</summary>'
+        f'<p class="note">These rasters expose the individual discovery channels used to rank candidates. They are particularly useful when comparing sensitivity levels and investigating subtle features.</p>'
+        f'<ul>{diagnostic_links}</ul></details>'
+        if diagnostic_links else ""
+    )
 
     interactive_map_html = '<p class="empty">No interactive layer map was generated for this run.</p>'
     map_reference = next(
@@ -597,7 +619,12 @@ def write_html_report(
             viewport=viewport,
         )
 
-    sensitivity_name = str((anomaly_metadata or {}).get("sensitivity", "medium"))
+    sensitivity_value = (anomaly_metadata or {}).get("sensitivity", 5)
+    try:
+        sensitivity_level = int(sensitivity_value)
+    except (TypeError, ValueError):
+        sensitivity_level = 5
+    sensitivity_name = f"{sensitivity_level} / 10"
     detector_workers = (anomaly_metadata or {}).get("workers_requested", 0)
     detector_workers_label = "auto" if detector_workers in (None, 0) else str(detector_workers)
 
@@ -608,12 +635,15 @@ def write_html_report(
   const preferredTheme = savedTheme || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   root.dataset.theme = preferredTheme;
 
+  function setTheme(theme) {
+    root.dataset.theme = theme;
+    if (window.localStorage) localStorage.setItem('prospector-theme', theme);
+  }
+  document.querySelectorAll('[data-theme-choice]').forEach(function(button) {
+    button.addEventListener('click', function() { setTheme(button.getAttribute('data-theme-choice')); });
+  });
   document.querySelectorAll('[data-theme-toggle]').forEach(function(button) {
-    button.addEventListener('click', function() {
-      const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
-      root.dataset.theme = next;
-      if (window.localStorage) localStorage.setItem('prospector-theme', next);
-    });
+    button.addEventListener('click', function() { setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'); });
   });
 
   document.querySelectorAll('.layer-map').forEach(function(map) {
@@ -682,6 +712,22 @@ def write_html_report(
   --bg: #0c1017; --panel: #131a24; --panel-2: #1a2330; --text: #edf2f7; --muted: #9aa7b8;
   --border: #293444; --accent: #8b93ff; --accent-soft: rgba(139,147,255,.15); --shadow: 0 18px 50px rgba(0,0,0,.32);
 }}
+:root[data-theme="rose"] {{
+  --bg:#fff7f8; --panel:#fffdfd; --panel-2:#fdecef; --text:#3f2f34; --muted:#826d74;
+  --border:#edd5db; --accent:#bb7183; --accent-soft:rgba(187,113,131,.14); --shadow:0 14px 40px rgba(126,68,85,.10);
+}}
+:root[data-theme="lavender"] {{
+  --bg:#faf8ff; --panel:#ffffff; --panel-2:#f0ecff; --text:#342d45; --muted:#756b8d;
+  --border:#ddd6f2; --accent:#8170b8; --accent-soft:rgba(129,112,184,.14); --shadow:0 14px 40px rgba(79,61,126,.09);
+}}
+:root[data-theme="mint"] {{
+  --bg:#f5fcf9; --panel:#ffffff; --panel-2:#e8f6f0; --text:#263c34; --muted:#668078;
+  --border:#cde5da; --accent:#5b9d82; --accent-soft:rgba(91,157,130,.14); --shadow:0 14px 40px rgba(59,112,91,.09);
+}}
+:root[data-theme="sky"] {{
+  --bg:#f5faff; --panel:#ffffff; --panel-2:#e9f3fb; --text:#263746; --muted:#667d8e;
+  --border:#d1e3ef; --accent:#5f94b8; --accent-soft:rgba(95,148,184,.14); --shadow:0 14px 40px rgba(51,103,137,.09);
+}}
 * {{ box-sizing:border-box; }}
 html {{ scroll-behavior:smooth; }}
 body {{ margin:0; background:linear-gradient(180deg,var(--bg),var(--bg)); color:var(--text); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.5; }}
@@ -716,18 +762,26 @@ pre {{ white-space:pre-wrap; max-height:400px; overflow:auto; background:var(--p
 .interactive-map svg path:hover {{ stroke-width:6 !important; opacity:1; }}
 .candidate-marker.is-selected path {{ stroke-width:7 !important; opacity:1; }}
 .candidate-marker.is-selected circle {{ r:11; }}
-.layer-map {{ position:relative; width:100%; overflow:hidden; background:#080b10; border-radius:14px; }}
-.layer-controls {{ position:absolute; left:1rem; top:1rem; right:1rem; z-index:30; display:flex; flex-wrap:wrap; gap:.55rem; padding:.65rem; background:rgba(16,20,28,.82); color:white; backdrop-filter:blur(14px); border:1px solid rgba(255,255,255,.14); border-radius:14px; box-shadow:0 10px 32px rgba(0,0,0,.2); }}
+.theme-menu summary {{ cursor:pointer; list-style:none; padding:.45rem .65rem; border:1px solid var(--border); border-radius:10px; background:var(--panel); color:var(--text); font-weight:700; }} .theme-menu summary::-webkit-details-marker {{ display:none; }}
+.theme-options {{ position:absolute; right:0; top:calc(100% + .45rem); z-index:120; display:grid; grid-template-columns:1fr 1fr; gap:.35rem; min-width:190px; padding:.5rem; background:var(--panel); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); }}
+.theme-options button {{ border:1px solid var(--border); background:var(--panel-2); color:var(--text); padding:.4rem .5rem; border-radius:8px; cursor:pointer; }}
+.layer-map {{ position:relative; width:100%; background:#080b10; border-radius:14px; overflow:hidden; }}
+.layer-controls {{ position:relative; z-index:30; margin:0 0 .55rem; padding:.1rem .75rem .45rem; background:var(--panel-2); color:var(--text); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); }}
+.layer-controls summary {{ cursor:pointer; list-style:none; padding:.5rem 0; font-weight:750; }}
+.layer-controls summary::-webkit-details-marker {{ display:none; }}
+.menu-glyph {{ display:inline-block; margin-right:.35rem; }}
+.layer-control-body {{ display:flex; flex-wrap:wrap; gap:.55rem 1rem; padding:0 0 .55rem; }}
+.layer-canvas {{ position:relative; overflow:hidden; border-radius:14px; }}
 .control-group {{ display:flex; align-items:center; flex-wrap:wrap; gap:.35rem .55rem; }}
 .control-group > strong {{ margin-right:.15rem; font-size:.78rem; opacity:.75; }}
 .base-button {{ border-color:rgba(255,255,255,.18); background:rgba(255,255,255,.06); color:white; padding:.35rem .55rem; }}
 .base-button.active {{ border-color:white; background:rgba(255,255,255,.16); font-weight:700; }}
-.layer-canvas {{ position:absolute; inset:0; overflow:hidden; }}
+
 .layer-canvas .layer-base,.layer-svg {{ position:absolute; display:block; width:100%; height:100%; }}
 .layer-svg {{ z-index:10; pointer-events:none; }} .layer-svg a {{ pointer-events:auto; }}
 .legend {{ display:grid; grid-template-columns:2.2rem 1fr; gap:.55rem .7rem; margin:.8rem 0 1rem; align-items:center; }}
 .legend-swatch {{ display:block; width:2rem; box-sizing:border-box; }}
-.note {{ color:var(--muted); }} .empty {{ padding:1rem; background:var(--panel-2); border-radius:12px; }}
+.note {{ color:var(--muted); }} .empty {{ padding:1rem; background:var(--panel-2); border-radius:12px; }} .diagnostic-details {{ margin:.8rem 0; padding:.7rem .85rem; background:var(--panel-2); border:1px solid var(--border); border-radius:12px; }} .diagnostic-details summary {{ cursor:pointer; font-weight:700; }}
 .badge {{ display:inline-flex; align-items:center; gap:.35rem; padding:.25rem .55rem; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:.76rem; font-weight:700; }}
 .metric-row {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.65rem; margin:.8rem 0 1rem; }}
 .metric {{ padding:.75rem .85rem; border:1px solid var(--border); background:var(--panel-2); border-radius:14px; }}
@@ -737,19 +791,19 @@ a {{ color:var(--accent); }}
 @media (max-width: 900px) {{ .topbar {{ position:static; }} main {{ padding:.8rem; }} .topbar {{ margin:0 -.8rem .8rem; padding:.75rem .8rem; }} th {{ position:static; }} table {{ display:block; overflow:auto; }} }}
 </style></head><body>
 <main>
-<div class="topbar"><div class="brand"><span class="brand-mark"></span><div><div class="brand h1">Prospector</div><div style="font-size:.72rem;color:var(--muted)">{_escape(run_id)}</div></div></div><button type="button" class="theme-button" data-theme-toggle>Toggle dark mode</button></div>
-<div class="hero"><span class="badge">LiDAR archaeological prospection</span><h2>Landscape evidence at {_escape(run_id)}</h2><p>Terrain-first discovery with Historic England, modern-map and satellite context.</p></div>
-<section><h2>Study area</h2><div class="metric-row"><div class="metric"><small>Centre</small><strong>{latitude:.5f}, {longitude:.5f}</strong></div><div class="metric"><small>British National Grid</small><strong>{easting:.0f} E / {northing:.0f} N</strong></div><div class="metric"><small>Diameter</small><strong>{diameter_m:,.0f} m</strong></div><div class="metric"><small>Detections</small><strong>{len(candidates)}</strong></div></div><table><tr><th>CRS</th><td>EPSG:27700</td></tr><tr><th>Study bounds</th><td>{study_bounds[0]:.2f}, {study_bounds[1]:.2f}, {study_bounds[2]:.2f}, {study_bounds[3]:.2f}</td></tr></table></section>
+<div class="topbar"><div class="brand"><span class="brand-mark"></span><div><div class="brand h1">Prospector</div><div style="font-size:.72rem;color:var(--muted)">{_escape(run_id)}</div></div></div><details class="theme-menu"><summary>Theme</summary><div class="theme-options"><button type="button" data-theme-choice="light">Light</button><button type="button" data-theme-choice="dark">Dark</button><button type="button" data-theme-choice="rose">Rose</button><button type="button" data-theme-choice="lavender">Lavender</button><button type="button" data-theme-choice="mint">Mint</button><button type="button" data-theme-choice="sky">Sky</button><button type="button" data-theme-toggle>Dark / light</button></div></details></div>
+<div class="hero"><span class="badge">LiDAR archaeological prospection</span><h2>Landscape evidence at {_escape(location_name or run_id)}</h2><p>Terrain-first discovery with Historic England, modern-map and satellite context.</p></div>
+<section><h2>Study area</h2><div class="metric-row"><div class="metric"><small>Location</small><strong>{_escape(location_name or "Coordinate study")}</strong></div><div class="metric"><small>Centre</small><strong>{latitude:.5f}, {longitude:.5f}</strong></div><div class="metric"><small>British National Grid</small><strong>{easting:.0f} E / {northing:.0f} N</strong></div><div class="metric"><small>Diameter</small><strong>{diameter_m:,.0f} m</strong></div><div class="metric"><small>Detections</small><strong>{len(candidates)}</strong></div></div><table><tr><th>Resolved place</th><td>{_escape(location_display_name or location_name or "—")}</td></tr><tr><th>CRS</th><td>EPSG:27700</td></tr><tr><th>Study bounds</th><td>{study_bounds[0]:.2f}, {study_bounds[1]:.2f}, {study_bounds[2]:.2f}, {study_bounds[3]:.2f}</td></tr></table></section>
 
 <section><h2>LiDAR + Historic England Aerial Archaeology Mapping</h2><p class="note">The PNG itself contains the archaeological layer; the interactive map below lets you inspect the same evidence independently.</p>{_he_legend()}{overlay_html}</section>
 
 <section><h2>Interactive evidence map</h2><p class="note">Switch base imagery while keeping the Historic England and Prospector anomaly overlays aligned to the same map grid.</p>{interactive_map_html}</section>
 
-<section id="anomaly-section"><h2>Terrain anomaly scan</h2><p class="note">Candidate generation is LiDAR-first and remains valid without Historic England records. Historic England data are used to suppress already-mapped monument geometry and provide weak contextual similarity only.</p><div class="metric-row"><div class="metric"><small>Sensitivity</small><strong>{_escape(sensitivity_name)}</strong></div><div class="metric"><small>Detector workers</small><strong>{_escape(detector_workers_label)}</strong></div><div class="metric"><small>Retained candidates</small><strong>{len(candidates)}</strong></div><div class="metric"><small>HE detailed features</small><strong>{len(aim_features)}</strong></div></div>{anomaly_map_html}<table><thead><tr><th>#</th><th>Map</th><th>Class</th><th>Final</th><th>LiDAR</th><th>Persistence</th><th>Morphology</th><th>Linear</th><th>Modern</th><th>Satellite</th><th>HE similarity</th><th>Relief</th><th>Scale</th><th>Area</th><th>Why retained</th></tr></thead><tbody>{candidate_rows}</tbody></table><details><summary>Detector parameters and provenance</summary><pre>{metadata_json}</pre></details></section>
+<section id="anomaly-section"><h2>Terrain anomaly scan</h2><p class="note">Hybrid discovery combines multi-scale local relief, persistence, linear/Hough structure, ring/annular response, ridge/valley morphology, local texture/coherence and unsupervised terrain novelty. Historic England remains contextual evidence and an exclusion mask.</p><div class="metric-row"><div class="metric"><small>Sensitivity</small><strong>{_escape(sensitivity_name)}</strong></div><div class="metric"><small>Detector</small><strong>Hybrid + unsupervised ML</strong></div><div class="metric"><small>Detector workers</small><strong>{_escape(detector_workers_label)}</strong></div><div class="metric"><small>Retained candidates</small><strong>{len(candidates)}</strong></div><div class="metric"><small>HE detailed features</small><strong>{len(aim_features)}</strong></div></div>{anomaly_map_html}<table><thead><tr><th>#</th><th>Map</th><th>Class</th><th>Final</th><th>LiDAR</th><th>Persistence</th><th>Morphology</th><th>Linear</th><th>Ring</th><th>Ridge/valley</th><th>Novelty</th><th>Texture</th><th>Modern</th><th>Satellite</th><th>HE similarity</th><th>Relief</th><th>Scale</th><th>Area</th><th>Why retained</th></tr></thead><tbody>{candidate_rows}</tbody></table>{diagnostic_html}<details><summary>Detector parameters and provenance</summary><pre>{metadata_json}</pre></details></section>
 
 <section><h2>Modern feature context</h2><p class="note">Modern mapping is a penalty/context source, not the discovery engine. Roads and buildings are strongly down-ranked; boundaries and tracks are treated more softly.</p><p>Combined modern-context GeoJSON: {_relative_link(destination, modern_context_path)}</p><p>Modernity score raster: {_relative_link(destination, modern_context_raster_path)}</p></section>
 
-<section><h2>Satellite context</h2><p class="note">Sentinel-2 is contextual evidence only. It can support a terrain signal through vegetation/reflectance differences but does not define an archaeological candidate.</p>{satellite_html}<table><tr><th>Selected scenes</th><td>{_escape(satellite_meta.get("scene_count", 0))}</td></tr><tr><th>Support raster</th><td>{_relative_link(destination, satellite_support_path)}</td></tr><tr><th>STAC search record</th><td>{_relative_link(destination, satellite_search_path)}</td></tr></table></section>
+<section><h2>Satellite context</h2><p class="note">Sentinel-2 is an optional visual base layer and contextual evidence. It can support a terrain signal through vegetation/reflectance differences but does not define an archaeological candidate.</p>{satellite_html}<table><tr><th>Selected scenes</th><td>{_escape(satellite_meta.get("scene_count", 0))}</td></tr><tr><th>Support raster</th><td>{_relative_link(destination, satellite_support_path)}</td></tr><tr><th>STAC search record</th><td>{_relative_link(destination, satellite_search_path)}</td></tr></table></section>
 
 <section><h2>Combined terrain anomalies + Historic England mapping</h2><p class="note">Review image with anomaly labels and Historic England context rendered on the same LiDAR grid.</p>{combined_map_html}</section>
 
@@ -759,6 +813,7 @@ a {{ color:var(--accent); }}
 
 <section><h2>Provenance</h2><p>{cache_hits} cache hit(s), {downloads} download(s).</p><table><tr><th>Status</th><th>URL</th><th>SHA-256</th><th>Bytes</th></tr>{''.join(f'<tr><td>{_escape("HIT" if e.get("cache_hit") else "DOWNLOAD")}</td><td>{_escape(e.get("url", ""))}</td><td><code>{_escape(e.get("sha256", ""))}</code></td><td>{_escape(e.get("size_bytes", ""))}</td></tr>' for e in cache_entries)}</table></section>
 <section><h2>Acquisition status</h2>{error_html}</section>
+<section><h2>Location attribution</h2><p>{_escape(location_attribution or "No reverse-geocoder attribution supplied.")}</p></section>
 {layer_script}<footer>Prospector {_escape(application_version)}. LiDAR elevation supplied by the Environment Agency component used by the NLS Maps 50cm–1m composite; archaeology from Historic England Aerial Investigation and Mapping; modern context from Ordnance Survey/OpenStreetMap; satellite context from Sentinel-2 via Microsoft Planetary Computer.</footer>
 </main></body></html>"""
     destination.write_text(document, encoding="utf-8")

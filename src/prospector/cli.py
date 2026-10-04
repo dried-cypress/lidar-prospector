@@ -15,6 +15,7 @@ from prospector.domain import Coordinate, StudyArea
 from prospector.providers.historic_england import HistoricEnglandProvider
 from prospector.providers.http import CachedResponse, HttpClient
 from prospector.providers.lidar import DTM_COVERAGE_ID, WCS_URL, LidarProvider
+from prospector.providers.location import DEFAULT_REVERSE_GEOCODER_URL, LocationProvider
 from prospector.providers.openstreetmap import OpenStreetMapContextProvider
 from prospector.providers.os import OSFeaturesProvider, OSOpenMapProvider
 from prospector.providers.satellite import SatelliteProvider
@@ -97,12 +98,6 @@ def init(
     project: Path = typer.Option(Path("./project"), "--project", "-p"),
 ) -> None:
     """Initialise a project directory."""
-    # OS Data Hub API-key authentication uses the API key alone. The project
-    # secret is not required for the API-key header authentication used by the
-    # OS Features API. Prefer the documented variable name, but retain the
-    # previous OS_API_KEY name for backwards compatibility.
-    os_api_key = os_api_key or os.getenv("OS_API_KEY")
-
     config = AppConfig.for_project(project)
     config.ensure_directories()
     console.print(f"[green]Project initialised:[/green] {project.resolve()}")
@@ -143,6 +138,11 @@ def analyse(
         "--no-satellite",
         help="Disable Sentinel-2 contextual imagery acquisition.",
     ),
+    no_location: bool = typer.Option(
+        False,
+        "--no-location",
+        help="Disable reverse-geocoding of the study coordinate to a place name.",
+    ),
     os_data: Path | None = typer.Option(
         None,
         "--os-data",
@@ -160,10 +160,12 @@ def analyse(
         "--os-download",
         help="Allow the slower OS OpenMap Local 100 km National Grid tile download when no OS API key is available.",
     ),
-    sensitivity: str = typer.Option(
-        "medium",
+    sensitivity: int = typer.Option(
+        5,
         "--sensitivity",
-        help="Anomaly detection sensitivity: low, medium, or high.",
+        min=1,
+        max=10,
+        help="Anomaly detection sensitivity from 1 (conservative) to 10 (maximum exploratory recall).",
     ),
     workers: int = typer.Option(
         0,
@@ -186,6 +188,26 @@ def analyse(
     client = HttpClient(config.cache_dir, config.request_timeout_seconds)
     run_path = Path(run.path)
     errors: list[str] = []
+    location_name: str | None = None
+    location_display_name: str | None = None
+    location_attribution: str | None = None
+    location_cache: list[CachedResponse] = []
+    location_metadata: dict[str, Any] = {"enabled": False}
+    if not no_location:
+        location_url = os.getenv("PROSPECTOR_GEOCODER_URL", DEFAULT_REVERSE_GEOCODER_URL)
+        location_result = LocationProvider(client, location_url).reverse(latitude, longitude)
+        location_name = location_result.name
+        location_display_name = location_result.display_name
+        location_attribution = (location_result.metadata or {}).get("attribution")
+        location_metadata = {"enabled": True, **location_result.metadata}
+        if location_result.cache_entry is not None:
+            location_cache.append(location_result.cache_entry)
+        if location_result.error:
+            errors.append(f"Location lookup failed: {location_result.error}")
+        elif location_name:
+            console.print(f"Location: {location_name}")
+    else:
+        console.print("Location lookup disabled")
     study_bbox = area.bounds
     if not (
         study_bbox[0] <= area.easting <= study_bbox[2]
@@ -478,6 +500,7 @@ def analyse(
             anomaly_metadata["external_context"] = {
                 **context_metadata,
                 "satellite": satellite_metadata,
+                "location": location_metadata,
                 "modern_feature_count": len(modern_features),
             }
             candidate_output = run_path / "candidates" / "terrain-anomalies.geojson"
@@ -506,6 +529,7 @@ def analyse(
     if lidar_cache is not None:
         cache_entries.append(lidar_cache)
     cache_entries.extend(context_cache)
+    cache_entries.extend(location_cache)
     cache_manifest = _cache_manifest(client, cache_entries)
     try:
         write_html_report(
@@ -531,6 +555,9 @@ def analyse(
             candidates=candidates,
             candidate_geojson_path=candidate_output,
             anomaly_metadata=anomaly_metadata,
+            location_name=location_name,
+            location_display_name=location_display_name,
+            location_attribution=location_attribution,
             study_bounds=study_bbox,
             map_bounds=map_bounds,
             modern_context_path=modern_context_geojson,
@@ -594,9 +621,9 @@ def analyse(
                 "status": "completed" if candidate_output is not None else "failed",
             },
             "classifier": {
-                "name": "deterministic-context-ranker",
+                "name": "hybrid-terrain-novelty-ranker",
                 "version": __version__,
-                "status": "heuristic; no trained ML model yet",
+                "status": "deterministic morphology + unsupervised per-AOI ML novelty",
             },
         },
         sources={
@@ -624,6 +651,7 @@ def analyse(
             "context": {
                 **context_metadata,
                 "satellite": satellite_metadata,
+                "location": location_metadata,
                 "modern_feature_count": len(modern_features),
             },
         },

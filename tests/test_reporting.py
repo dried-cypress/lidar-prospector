@@ -254,6 +254,71 @@ def test_html_report_contains_context_aware_candidate_evidence(tmp_path: Path) -
 
 
 
+
+def test_html_report_exposes_v04_detector_channels_and_diagnostics(tmp_path: Path) -> None:
+    report = tmp_path / "report.html"
+    for name in ("discovery-score.tif", "terrain-novelty.tif", "ring-response.tif", "ridge-valley-response.tif"):
+        (tmp_path / name).write_bytes(b"diagnostic")
+    candidate = TerrainCandidate(
+        1,
+        Polygon([(10, 10), (30, 10), (30, 20), (10, 20), (10, 10)]),
+        88.0,
+        200.0,
+        1.2,
+        "positive",
+        16.0,
+        lidar_score=82.0,
+        persistence_score=70.0,
+        morphology_score=80.0,
+        modern_penalty=10.0,
+        satellite_support=25.0,
+        he_similarity=65.0,
+        linear_score=61.0,
+        terrain_novelty_score=71.0,
+        ring_score=72.0,
+        ridge_valley_score=73.0,
+        texture_score=74.0,
+    )
+    write_html_report(
+        report,
+        run_id="v04",
+        application_version="0.4.0",
+        latitude=50.8,
+        longitude=-0.2,
+        easting=530000,
+        northing=105000,
+        diameter_m=1000,
+        aim_features=[],
+        monument_extents=[],
+        project_areas=[],
+        cache_entries=[],
+        errors=[],
+        overlay_path=None,
+        dtm_path=None,
+        hillshade_path=None,
+        aim_geojson_path=None,
+        study_bounds=(0, 0, 100, 100),
+        candidates=[candidate],
+        anomaly_metadata={
+            "sensitivity": 5,
+            "diagnostic_rasters": {
+                "discovery_score": str(tmp_path / "discovery-score.tif"),
+                "terrain_novelty": str(tmp_path / "terrain-novelty.tif"),
+                "ring_response": str(tmp_path / "ring-response.tif"),
+                "ridge_valley_response": str(tmp_path / "ridge-valley-response.tif"),
+            },
+        },
+    )
+    text = report.read_text(encoding="utf-8")
+    assert "71.0" in text
+    assert "72.0" in text
+    assert "73.0" in text
+    assert "74.0" in text
+    assert "Open detector diagnostic layers" in text
+    assert "discovery score" in text.lower()
+    assert "terrain novelty" in text.lower()
+
+
 def test_html_report_has_switchable_local_evidence_bases(tmp_path: Path) -> None:
     from PIL import Image
 
@@ -295,6 +360,9 @@ def test_html_report_has_switchable_local_evidence_bases(tmp_path: Path) -> None
     assert 'data-base-button="satellite"' in text
     assert "layer-map" in text
     assert "data-toggle-overlay=\"he\"" in text
+    assert "layer-controls" in text
+    assert "position:absolute" not in text[text.index(".layer-controls"):text.index(".layer-controls") + 260]
+    assert "Layers &amp; base imagery" in text
 
 
 def test_html_report_has_candidate_navigation_and_theme_controls(tmp_path: Path) -> None:
@@ -312,7 +380,10 @@ def test_html_report_has_candidate_navigation_and_theme_controls(tmp_path: Path)
     assert 'data-focus-candidate="1"' in text
     assert 'id="candidate-1"' in text
     assert 'map-candidate-1' in text
-    assert 'Toggle dark mode' in text
+    assert 'data-theme-choice="rose"' in text
+    assert 'data-theme-choice="lavender"' in text
+    assert 'data-theme-choice="mint"' in text
+    assert 'data-theme-choice="sky"' in text
 
 
 def test_html_report_candidate_table_links_to_visible_map_marker(tmp_path: Path) -> None:

@@ -49,7 +49,10 @@ def test_detect_terrain_anomalies_returns_candidates(tmp_path: Path) -> None:
         destination.write(data, 1)
 
     candidates, metadata = detect_terrain_anomalies(dtm, [])
-    assert metadata["name"] == "multi-scale-local-relief"
+    assert metadata["name"] == "hybrid-terrain-pattern-detector"
+    assert metadata["version"] == "0.4.0"
+    assert metadata["sensitivity"] == 5
+    assert metadata["machine_learning"]["model"] == "IsolationForest"
     assert candidates
     assert all(candidate.area_m2 >= 12.0 for candidate in candidates)
 
@@ -199,20 +202,21 @@ def test_long_straight_earthwork_gets_linear_priority(tmp_path: Path) -> None:
     morphology = dict(linear.morphology)
     assert linear.linear_score >= 50.0
     assert morphology["elongation"] >= 10.0
-    assert "very elongated linear morphology" in linear.reasons
+    assert "elongated linear morphology" in linear.reasons
     assert metadata["straight_line_seeded"] is True
 
 
 def test_sensitivity_profiles_expose_progressively_broader_detection() -> None:
     from prospector.terrain.anomalies import SENSITIVITY_PROFILES
 
-    low = SENSITIVITY_PROFILES["low"]
-    medium = SENSITIVITY_PROFILES["medium"]
-    high = SENSITIVITY_PROFILES["high"]
-    assert low.threshold_percentile > medium.threshold_percentile > high.threshold_percentile
-    assert low.min_area_m2 > medium.min_area_m2 > high.min_area_m2
-    assert low.max_candidates < medium.max_candidates < high.max_candidates
-    assert low.min_line_length_m > medium.min_line_length_m > high.min_line_length_m
+    levels = [SENSITIVITY_PROFILES[str(level)] for level in range(1, 11)]
+    assert [profile.level for profile in levels] == list(range(1, 11))
+    assert all(left.threshold_percentile > right.threshold_percentile for left, right in zip(levels, levels[1:]))
+    assert all(left.min_area_m2 > right.min_area_m2 for left, right in zip(levels, levels[1:]))
+    assert all(left.max_candidates < right.max_candidates for left, right in zip(levels, levels[1:]))
+    assert all(left.min_line_length_m > right.min_line_length_m for left, right in zip(levels, levels[1:]))
+    assert SENSITIVITY_PROFILES["medium"].level == 5
+    assert SENSITIVITY_PROFILES["high"].level == 8
 
 
 def test_detector_accepts_explicit_worker_count(tmp_path: Path) -> None:
@@ -229,5 +233,50 @@ def test_detector_accepts_explicit_worker_count(tmp_path: Path) -> None:
     ) as destination:
         destination.write(data, 1)
     _candidates, metadata = detect_terrain_anomalies(dtm, [], sensitivity="low", workers=1)
-    assert metadata["sensitivity"] == "low"
+    assert metadata["sensitivity"] == 2
     assert metadata["workers_requested"] == 1
+
+
+def test_ring_and_novelty_channels_identify_closed_terrain_pattern(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_origin
+    from prospector.terrain.anomalies import detect_terrain_anomalies
+
+    yy, xx = np.mgrid[0:220, 0:220]
+    ring = 2.5 * np.exp(-((np.hypot(xx - 110, yy - 110) - 35.0) ** 2) / (2.0 * 2.5**2))
+    dtm = tmp_path / "ring-pattern.tif"
+    with rasterio.open(
+        dtm, "w", driver="GTiff", width=220, height=220, count=1, dtype="float32",
+        crs="EPSG:27700", transform=from_origin(500000, 500220, 1, 1), nodata=-9999,
+    ) as destination:
+        destination.write(ring.astype("float32"), 1)
+
+    candidates, metadata = detect_terrain_anomalies(dtm, [], sensitivity=5, workers=1)
+    assert candidates
+    strongest = max(candidates, key=lambda candidate: candidate.ring_score)
+    assert strongest.ring_score >= 80.0
+    assert strongest.terrain_novelty_score > 0.0
+    assert "ring/bank morphology" in strongest.reasons
+    assert set(metadata["diagnostic_rasters"]) == {
+        "discovery_score", "terrain_novelty", "ring_response", "ridge_valley_response"
+    }
+
+
+def test_sensitivity_ten_is_explicitly_exploratory(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_origin
+    from prospector.terrain.anomalies import detect_terrain_anomalies
+
+    yy, xx = np.mgrid[0:160, 0:160]
+    data = (0.015 * yy + 0.4 * np.sin(xx / 8.0)).astype("float32")
+    dtm = tmp_path / "exploratory.tif"
+    with rasterio.open(
+        dtm, "w", driver="GTiff", width=160, height=160, count=1, dtype="float32",
+        crs="EPSG:27700", transform=from_origin(510000, 510160, 1, 1), nodata=-9999,
+    ) as destination:
+        destination.write(data, 1)
+
+    _candidates, metadata = detect_terrain_anomalies(dtm, [], sensitivity=10, workers=1)
+    assert metadata["sensitivity"] == 10
+    assert metadata["sensitivity_description"].startswith("1=very conservative")
+    assert metadata["max_candidates"] == 735

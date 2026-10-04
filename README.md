@@ -2,9 +2,9 @@
 
 Prospector is a reproducible archaeological landscape prospection tool for combining LiDAR terrain data with heritage, modern-feature and satellite context.
 
-## Version 0.3.7
+## Version 0.4.0
 
-V0.3.7 keeps the proven LiDAR visualisation settings while making the raster archaeological overlays complete and substantially improving the anomaly detector without replacing the current architecture.
+V0.4.0 is the detector-focused release. It keeps the established LiDAR visualisation while adding a hybrid terrain-pattern detector designed to find archaeological-looking structures that do not resemble a single bright local-relief blob.
 
 The detector now:
 
@@ -18,13 +18,17 @@ The detector now:
 - acquires multi-scene Sentinel-2 L2A imagery from the Microsoft Planetary Computer public STAC catalogue
 - derives a multi-scene satellite spectral-support raster from local NDVI anomalies
 - compares candidate geometry against known Historic England AIM feature geometry as a deterministic similarity prior
-- exposes the component scores and reasons in GeoJSON and the HTML report
+- measures annular/ring response for enclosures, barrows and bank-like closed forms
+- measures ridge/valley response for scarps, hollow ways, terraces and subtle earthworks
+- measures local texture and surface coherence so visually distinctive terrain is not lost by a single threshold
+- uses an unsupervised `IsolationForest` over the terrain feature stack to surface unusual combinations learned from the current AOI
+- exposes every detector channel, threshold and reason in GeoJSON and the HTML report
 
-This is still a deterministic contextual ranker, **not a trained ML model**. The output remains archaeological research leads rather than confirmed sites.
+The ML component is deliberately **not an AI service and is not a trained archaeological classifier**. It learns the distribution of terrain patterns inside the current AOI without human labels. True supervised archaeological learning remains a later stage requiring a reviewed positive/negative corpus.
 
 ## Locked LiDAR visualisation
 
-The established archaeological hillshade presentation is kept stable in V0.3.7:
+The established archaeological hillshade presentation is kept stable in V0.4.0:
 
 - 8-direction multidirectional hillshade at 38° altitude
 - blended 70% multidirectional / 30% conventional north-west illumination at 42° altitude
@@ -33,7 +37,7 @@ The established archaeological hillshade presentation is kept stable in V0.3.7:
 - restrained 0.14 elevation tint in the LiDAR/AIM image
 - the anomaly/combined image renderer continues to use the same hillshade and relief visualisation settings as V0.2.1
 
-The generated PNG overlays are therefore a regression target for future versions. V0.3.7 makes the underlying PNG renderer itself authoritative: Historic England layers are rasterised directly into the generated PNGs, while the HTML report additionally exposes the same vectors as toggleable overlays.
+The generated PNG overlays are therefore a regression target for future versions. V0.4.0 makes the underlying PNG renderer itself authoritative: Historic England layers are rasterised directly into the generated PNGs, while the HTML report additionally exposes the same vectors as toggleable overlays.
 
 ## LiDAR source
 
@@ -88,7 +92,13 @@ prospector analyse --latitude 50.8657 --longitude -0.2405 \
   --os-data /path/to/os-openmap-local-tq.zip
 ```
 
-A GeoPackage, Shapefile ZIP or extracted vector directory can be supplied. V0.3.7 also queries OpenStreetMap as a supplementary source for paths, tracks, fences, hedges and buildings.
+A GeoPackage, Shapefile ZIP or extracted vector directory can be supplied. V0.4.0 also queries OpenStreetMap as a supplementary source for paths, tracks, fences, hedges and buildings.
+
+## Coordinate naming
+
+The CLI remains coordinate-driven. V0.4.0 also performs an optional reverse-geocode lookup so the report can display a human-readable location name while retaining the exact latitude/longitude as the authoritative input. The default provider is Nominatim; set `PROSPECTOR_GEOCODER_URL` to use another compatible reverse-geocoder, or use `--no-location` to disable the lookup.
+
+The result is cached as normal Prospector provenance and is not used by the detector.
 
 ## Satellite context
 
@@ -100,7 +110,7 @@ The satellite signal is deliberately **supporting evidence**, not a classifier. 
 
 ## Detection model
 
-The V0.3.7 detector is intentionally transparent and reproducible:
+The V0.4.0 detector is intentionally transparent and reproducible:
 
 ```text
 LiDAR DTM
@@ -109,10 +119,14 @@ LiDAR DTM
    +--> robust z-score anomaly field
    +--> cross-scale persistence
    +--> multi-scale linear/edge response + straight-line Hough seeding
+   +--> annular/ring response
+   +--> ridge/valley response + local texture/coherence
+   +--> unsupervised Isolation Forest terrain novelty
    +--> mask registered archaeology before components are built
    +--> connected candidate regions
             |
             +--> geometry / morphology
+            +--> terrain-pattern channel scores
             +--> modern context penalty
             +--> satellite spectral support
             +--> Historic England geometry similarity
@@ -141,6 +155,10 @@ terrain/
   hillshade.tif
   modern-context-score.tif
   satellite-support.tif
+  discovery-score.tif
+  terrain-novelty.tif
+  ring-response.tif
+  ridge-valley-response.tif
 
 overlays/
   lidar-aim.png
@@ -176,14 +194,15 @@ python -m pip install -e '.[all]'
 prospector analyse --latitude 50.8657 --longitude -0.2405
 ```
 
-Detection sensitivity can be changed per run:
+Detection sensitivity is now a 1–10 scale:
 
 ```bash
-prospector analyse --latitude 50.8657 --longitude -0.2405 --sensitivity low
-prospector analyse --latitude 50.8657 --longitude -0.2405 --sensitivity high
+prospector analyse --latitude 50.8657 --longitude -0.2405 --sensitivity 1
+prospector analyse --latitude 50.8657 --longitude -0.2405 --sensitivity 5
+prospector analyse --latitude 50.8657 --longitude -0.2405 --sensitivity 10
 ```
 
-`low` favours larger, stronger structures; `medium` is the normal research setting; `high` broadens the search to subtle terrain signatures. `--workers 0` uses a conservative automatic detector thread count; a positive value overrides it.
+`5` is the default balanced research setting: conservative enough to keep review practical, but broad enough to seed candidates from several independent terrain-pattern channels. `1` is deliberately selective; `10` is the exploratory “show me anything plausible” setting and can produce many false positives. `--workers 0` uses a conservative automatic detector thread count; a positive value overrides it.
 
 Useful offline/reduced-data options:
 
@@ -201,7 +220,7 @@ The external datasets remain under their respective upstream licences/terms. The
 
 ## Development philosophy
 
-V0.3.7 is deliberately the improved V1 detector. A future V2 can use this deterministic system as the labelled-data and hard-negative generation layer for a learned multimodal model. Human-reviewed candidate outcomes should eventually become the project's most valuable training data.
+V0.4.0 is deliberately a hybrid discovery system rather than an opaque model. Each candidate records the terrain signals that produced it. Human-reviewed candidate outcomes should eventually become the project's most valuable training data; that corpus can support a future supervised classifier without removing the transparent detector.
 
 ### Fast OS context
 

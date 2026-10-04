@@ -231,3 +231,45 @@ def test_historic_england_search_paginates_and_resolves_layers_by_name(monkeypat
     assert result.metadata["layers"]["Detailed_Mapping"]["layer_id"] == 20
     assert result.metadata["layers"]["Detailed_Mapping"]["pages_returned"] == 2
     assert sum(1 for key, _url, _params in client.calls if key.startswith("historic-england-layer-v035-20")) == 2
+
+
+def test_satellite_reproject_accepts_integer_source_data() -> None:
+    import numpy as np
+    from rasterio.transform import from_origin
+    from prospector.providers.satellite import SatelliteProvider
+
+    source = np.arange(9, dtype="uint16").reshape(3, 3)
+    result = SatelliteProvider._reproject(
+        source,
+        from_origin(0, 3, 1, 1),
+        "EPSG:4326",
+        (3, 3),
+        from_origin(0, 3, 1, 1),
+        "EPSG:4326",
+    )
+    assert result.dtype == np.float32
+    assert result.shape == (3, 3)
+    assert float(np.nanmax(result)) == 8.0
+
+
+def test_location_provider_selects_english_name_and_caches_result(tmp_path: Path) -> None:
+    from prospector.providers.http import CachedResponse
+    from prospector.providers.location import LocationProvider
+
+    class FakeClient:
+        def cached_json(self, key, url, params, *, validator=None, headers=None):
+            assert key == "reverse-geocode"
+            assert params["format"] == "jsonv2"
+            assert headers["Accept"] == "application/json"
+            payload = {
+                "display_name": "Thundersbarrow, West Sussex, England, United Kingdom",
+                "namedetails": {"name:en": "Thundersbarrow Hill", "name": "Thundersbarrow"},
+                "address": {"village": "Pyecombe"},
+            }
+            return payload, CachedResponse(tmp_path / "location.json", True, "0" * 64)
+
+    result = LocationProvider(FakeClient()).reverse(50.8620, -0.2547)
+    assert result.name == "Thundersbarrow Hill"
+    assert result.display_name == "Thundersbarrow, West Sussex, England, United Kingdom"
+    assert result.error is None
+    assert result.metadata["attribution"] == "© OpenStreetMap contributors"

@@ -152,7 +152,7 @@ class SatelliteProvider:
                     max(1, int(window.width)),
                     max(1, int(window.height)),
                 )
-                data = dataset.read(1, window=window, boundless=True, fill_value=0).astype("float32")
+                data = dataset.read(1, window=window, boundless=True, masked=True).filled(np.nan).astype("float32")
                 transform = dataset.window_transform(window)
                 return data, transform, str(dataset.crs)
 
@@ -172,9 +172,11 @@ class SatelliteProvider:
         from rasterio.warp import reproject
 
         target_shape = (int(target_shape[0]), int(target_shape[1]))
+        source = np.asarray(data, dtype="float32")
+        source[~np.isfinite(source)] = np.nan
         result = np.full(target_shape, np.nan, dtype="float32")
         reproject(
-            source=data,
+            source=source,
             destination=result,
             src_transform=source_transform,
             src_crs=source_crs,
@@ -310,16 +312,33 @@ class SatelliteProvider:
         run_dir.mkdir(parents=True, exist_ok=True)
         source_dir = run_dir / "sources" / "satellite"
         source_dir.mkdir(parents=True, exist_ok=True)
+
         try:
             to_wgs84 = Transformer.from_crs("EPSG:27700", "EPSG:4326", always_xy=True)
             xmin, ymin, xmax, ymax = bbox_bng
-            points = [to_wgs84.transform(x, y) for x, y in ((xmin, ymin), (xmax, ymin), (xmin, ymax), (xmax, ymax))]
-            bbox_wgs84 = (min(p[0] for p in points), min(p[1] for p in points), max(p[0] for p in points), max(p[1] for p in points))
+            points = [
+                to_wgs84.transform(x, y)
+                for x, y in ((xmin, ymin), (xmax, ymin), (xmin, ymax), (xmax, ymax))
+            ]
+            bbox_wgs84 = (
+                min(point[0] for point in points),
+                min(point[1] for point in points),
+                max(point[0] for point in points),
+                max(point[1] for point in points),
+            )
             all_scenes, search_cache = self._search(bbox_wgs84)
             cache_entries.append(search_cache)
             scenes = self._select_scenes(all_scenes)
             search_path = source_dir / "sentinel-2-stac-search.json"
-            search_path.write_text(json.dumps({"collection": COLLECTION, "bbox_wgs84": bbox_wgs84, "scenes": all_scenes}, indent=2, default=str) + "\n", encoding="utf-8")
+            search_path.write_text(
+                json.dumps(
+                    {"collection": COLLECTION, "bbox_wgs84": bbox_wgs84, "scenes": all_scenes},
+                    indent=2,
+                    default=str,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             if not scenes:
                 raise RuntimeError("No sufficiently clear Sentinel-2 scenes were found for the study area")
 
@@ -327,25 +346,60 @@ class SatelliteProvider:
                 target_shape = (int(dtm.height), int(dtm.width))
                 target_transform = dtm.transform
                 target_res = float(max(abs(dtm.res[0]), abs(dtm.res[1])))
+
             support_arrays: list[np.ndarray] = []
+            successful_scenes: list[dict[str, Any]] = []
             for scene in scenes:
-                ndvi, _native_ndvi = self._scene_ndvi(
-                    scene,
+                scene_id = str(scene.get("id") or "unknown-scene")
+                try:
+                    ndvi, _native_ndvi = self._scene_ndvi(
+                        scene,
+                        dtm_path,
+                        bbox_bng,
+                        target_shape,
+                        target_transform,
+                    )
+                    support_arrays.append(
+                        self._spectral_anomaly(
+                            ndvi,
+                            pixels_per_metre=max(1.0, 1.0 / target_res),
+                        )
+                    )
+                    successful_scenes.append(scene)
+                except Exception as exc:
+                    errors.append(f"Sentinel-2 scene {scene_id} processing failed: {exc}")
+
+            if not support_arrays:
+                raise RuntimeError("No selected Sentinel-2 scene could be processed successfully")
+
+            support = np.nanmedian(np.stack(support_arrays, axis=0), axis=0).astype("float32")
+            support_path = self._write_float_raster(
+                run_dir / "terrain" / "satellite-support.tif",
+                support,
+                dtm_path,
+            )
+
+            preview_scene = successful_scenes[0]
+            try:
+                preview_path = self._preview_rgb(
+                    preview_scene,
+                    self,
                     dtm_path,
                     bbox_bng,
                     target_shape,
                     target_transform,
+                    run_dir / "overlays" / "satellite-latest.png",
                 )
-                support_arrays.append(self._spectral_anomaly(ndvi, pixels_per_metre=max(1.0, 1.0 / target_res)))
-            support = np.nanmedian(np.stack(support_arrays, axis=0), axis=0).astype("float32")
-            support_path = self._write_float_raster(run_dir / "terrain" / "satellite-support.tif", support, dtm_path)
-            preview_path = self._preview_rgb(
-                scenes[0], self, dtm_path, bbox_bng, target_shape, target_transform,
-                run_dir / "overlays" / "satellite-latest.png",
-            )
+                if preview_path is None:
+                    errors.append("Sentinel-2 preview could not be generated from the selected scene")
+            except Exception as exc:
+                errors.append(f"Sentinel-2 preview generation failed: {exc}")
+
             metadata.update(
                 {
                     "scene_count": len(scenes),
+                    "successful_scene_count": len(successful_scenes),
+                    "failed_scene_count": len(scenes) - len(successful_scenes),
                     "selected_scenes": [
                         {
                             "id": item.get("id"),
@@ -355,8 +409,19 @@ class SatelliteProvider:
                         for item in scenes
                     ],
                     "support_description": "Median multi-scene local NDVI anomaly, used as contextual evidence rather than an archaeological classifier.",
+                    "preview_description": "Optional RGB Sentinel-2 image aligned to the study DTM for visual inspection.",
                 }
             )
         except Exception as exc:
             errors.append(f"Sentinel-2 acquisition/processing failed: {exc}")
-        return SatelliteResult(support_path, preview_path, search_path, scenes, cache_entries, errors, metadata)
+
+        return SatelliteResult(
+            support_path,
+            preview_path,
+            search_path,
+            scenes,
+            cache_entries,
+            errors,
+            metadata,
+        )
+

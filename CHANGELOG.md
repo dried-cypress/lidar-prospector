@@ -1,3 +1,13 @@
+## 0.4.0
+
+- Replace the threshold-only terrain detector with a hybrid multi-signal discovery engine combining multi-scale relief persistence, Hough-supported linear structure, annular/ring response, ridge/valley morphology, local texture/coherence, Historic England morphology similarity, and per-AOI unsupervised IsolationForest terrain novelty.
+- Replace low/medium/high detector sensitivity with a 1–10 scale; level 5 is the default balanced research setting and level 10 is intentionally exploratory/high-recall.
+- Add transparent detector diagnostic rasters for discovery score, terrain novelty, ring response, and ridge/valley response.
+- Add optional Sentinel-2 imagery as a switchable report base layer and fix integer-raster reprojection failures in satellite processing.
+- Add optional coordinate reverse-geocoding so reports show a human-readable location name while retaining coordinates as the authoritative study input.
+- Move interactive layer controls above the image into a collapsible panel and expand report themes with Rose, Lavender, Mint, and Sky pastel themes alongside Light and Dark.
+- Add scikit-learn as a runtime dependency for the new unsupervised anomaly-ranking stage.
+
 ## 0.3.7
 
 - Stop candidate generation before Historic England detailed mapping and monument extents are labelled, preventing detector geometry from tracing known archaeological outlines or producing rings/halos around them.
@@ -48,6 +58,21 @@
 # Changelog
 
 ## Unreleased
+
+## 0.4.0 — Hybrid terrain-pattern detector
+
+- Replace the low/medium/high detector control with a 1–10 sensitivity scale; default `5` balances selectivity and recall, while `10` is deliberately exploratory.
+- Add multi-scale annular/ring response for closed banks, enclosures and mound-like forms.
+- Add multi-scale ridge/valley response and local texture/coherence channels for scarps, hollow ways, terraces and subtle earthworks.
+- Add unsupervised per-AOI `IsolationForest` terrain novelty scoring using the combined LiDAR feature stack; no AI API calls or remote model inference are used.
+- Keep Historic England as contextual evidence/exclusion rather than making known archaeology a prerequisite for discovery.
+- Expose the new detector channels, novelty metadata and reasons in candidate GeoJSON and the HTML report.
+- Add optional reverse-geocoded place naming to reports with cached provenance and `PROSPECTOR_GEOCODER_URL` override.
+- Move interactive map controls above the image so they cannot obscure anomaly geometry; make the layer menu collapsible.
+- Expand report themes to light, dark, rose, lavender, mint and sky pastel palettes.
+- Fix Sentinel-2 processing of integer source rasters by normalising source data to floating point before NaN-aware reprojection.
+- Make satellite processing resilient to a single bad scene and retain a usable support raster/preview when other selected scenes succeed.
+- Add `scikit-learn` as a runtime dependency for the unsupervised detector.
 
 ## 0.3.7
 
