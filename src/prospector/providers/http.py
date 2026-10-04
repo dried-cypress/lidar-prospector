@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib,json,re,tempfile
 from dataclasses import dataclass
-from datetime import UTC,datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any,Callable,Mapping
 import requests
@@ -14,7 +14,7 @@ class CachedResponse:
 class HttpClient:
     _KEY_PATTERN=re.compile(r"[^A-Za-z0-9._-]+")
     def __init__(self,cache_dir:Path,timeout:float=60.0)->None:
-        self.cache_dir=cache_dir; self.timeout=timeout; self.cache_dir.mkdir(parents=True,exist_ok=True); self.session=requests.Session(); self.session.headers.update({"User-Agent":"Prospector/0.4.0 (archaeological research tool)"})
+        self.cache_dir=cache_dir; self.timeout=timeout; self.cache_dir.mkdir(parents=True,exist_ok=True); self.session=requests.Session(); self.session.headers.update({"User-Agent":"Prospector/0.4.1 (archaeological research tool)"})
     @staticmethod
     def _request_digest(url:str,params:dict[str,Any]|None)->str:
         return hashlib.sha256(json.dumps([url,params],sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
@@ -35,7 +35,7 @@ class HttpClient:
         finally:
             if temporary_path is not None: temporary_path.unlink(missing_ok=True)
     def _write_metadata(self,path,*,url,params,sha256,content_type,size_bytes):
-        self._atomic_write(self._metadata_path(path),json.dumps({"url":url,"params":params,"retrieved_at":datetime.now(UTC).isoformat(),"sha256":sha256,"size_bytes":size_bytes,"content_type":content_type},indent=2,sort_keys=True).encode())
+        self._atomic_write(self._metadata_path(path),json.dumps({"url":url,"params":params,"retrieved_at":datetime.now(timezone.utc).isoformat(),"sha256":sha256,"size_bytes":size_bytes,"content_type":content_type},indent=2,sort_keys=True).encode())
     @staticmethod
     def _invalidate(path): path.unlink(missing_ok=True); path.with_suffix(path.suffix+".json").unlink(missing_ok=True)
     def _read_cached(self,path,*,validator):

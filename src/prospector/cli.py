@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,38 @@ def _raster_bounds(path: Path) -> tuple[float, float, float, float]:
             float(dataset.bounds.bottom),
             float(dataset.bounds.right),
             float(dataset.bounds.top),
+        )
+
+
+def _require_project_venv() -> None:
+    """Prevent an old user-site console script from running the application.
+
+    Prospector's supported installation is the repository-local `.venv`. A
+    user-site installation can otherwise win PATH resolution and mix system and
+    user Python packages, which is particularly dangerous for compiled geo
+    dependencies such as Rasterio and Matplotlib.
+    """
+    virtual_env = os.getenv("VIRTUAL_ENV")
+    if not virtual_env:
+        raise RuntimeError(
+            "Prospector must run from the project virtual environment. "
+            "Run `source .venv/bin/activate` first, then run `prospector`, "
+            "or invoke `.venv/bin/prospector` directly."
+        )
+
+    active = Path(sys.prefix).resolve()
+    expected = Path(virtual_env).resolve()
+    if active != expected:
+        raise RuntimeError(
+            f"Prospector is running under {sys.executable}, not the active virtual "
+            f"environment at {expected}. Use `{expected / 'bin/prospector'}` instead."
+        )
+
+    project_venv = Path(__file__).resolve().parents[2] / ".venv"
+    if project_venv.exists() and active != project_venv.resolve():
+        raise RuntimeError(
+            "Prospector is not running from this project's .venv. "
+            f"Use `{project_venv / 'bin/prospector'}` or activate that environment."
         )
 
 
@@ -175,6 +208,7 @@ def analyse(
     ),
 ) -> None:
     """Analyse a circular study area centred on a WGS84 coordinate."""
+    _require_project_venv()
     os_api_key = os_api_key or os.getenv("OS_API_KEY")
     config = AppConfig.for_project(project)
     config.ensure_directories()

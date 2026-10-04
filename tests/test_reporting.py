@@ -282,7 +282,7 @@ def test_html_report_exposes_v04_detector_channels_and_diagnostics(tmp_path: Pat
     write_html_report(
         report,
         run_id="v04",
-        application_version="0.4.0",
+        application_version="0.4.1",
         latitude=50.8,
         longitude=-0.2,
         easting=530000,

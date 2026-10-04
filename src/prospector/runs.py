@@ -1,6 +1,6 @@
 from __future__ import annotations
 import hashlib,json,platform
-from datetime import UTC,datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from prospector import __version__
@@ -15,7 +15,7 @@ def sha256_file(path:Path)->str:
 def _write_json_atomic(path:Path,data:dict[str,Any])->None:
     path.parent.mkdir(parents=True,exist_ok=True); temporary=path.with_suffix(path.suffix+".tmp"); temporary.write_text(json.dumps(data,indent=2,default=str)+"\n",encoding="utf-8"); temporary.replace(path)
 def create_run(config:AppConfig,area:StudyArea)->Run:
-    now=datetime.now(UTC); base_id=now.strftime("%Y%m%dT%H%M%SZ"); suffix=0
+    now=datetime.now(timezone.utc); base_id=now.strftime("%Y%m%dT%H%M%SZ"); suffix=0
     while True:
         run_id=f"{base_id}{f'-{suffix:02d}' if suffix else ''}"; path=config.runs_dir/run_id
         if not path.exists(): break
@@ -32,5 +32,5 @@ def update_run_metadata(run:Run,*,status=None,sources=None,outputs=None,errors=N
     if analysis: metadata.setdefault("analysis",{}).update(analysis)
     if outputs: metadata.setdefault("outputs",{}).update(outputs)
     if errors: metadata.setdefault("errors",[]).extend(errors)
-    if finished: metadata["finished_at"]=datetime.now(UTC).isoformat()
+    if finished: metadata["finished_at"]=datetime.now(timezone.utc).isoformat()
     _write_json_atomic(path,metadata)

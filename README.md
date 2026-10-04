@@ -2,9 +2,9 @@
 
 Prospector is a reproducible archaeological landscape prospection tool for combining LiDAR terrain data with heritage, modern-feature and satellite context.
 
-## Version 0.4.0
+## Version 0.4.1
 
-V0.4.0 is the detector-focused release. It keeps the established LiDAR visualisation while adding a hybrid terrain-pattern detector designed to find archaeological-looking structures that do not resemble a single bright local-relief blob.
+V0.4.1 is the detector-focused release, with Python 3.10 compatibility restored. It keeps the established LiDAR visualisation while adding a hybrid terrain-pattern detector designed to find archaeological-looking structures that do not resemble a single bright local-relief blob.
 
 The detector now:
 
@@ -28,7 +28,7 @@ The ML component is deliberately **not an AI service and is not a trained archae
 
 ## Locked LiDAR visualisation
 
-The established archaeological hillshade presentation is kept stable in V0.4.0:
+The established archaeological hillshade presentation is kept stable in V0.4.1:
 
 - 8-direction multidirectional hillshade at 38° altitude
 - blended 70% multidirectional / 30% conventional north-west illumination at 42° altitude
@@ -37,7 +37,7 @@ The established archaeological hillshade presentation is kept stable in V0.4.0:
 - restrained 0.14 elevation tint in the LiDAR/AIM image
 - the anomaly/combined image renderer continues to use the same hillshade and relief visualisation settings as V0.2.1
 
-The generated PNG overlays are therefore a regression target for future versions. V0.4.0 makes the underlying PNG renderer itself authoritative: Historic England layers are rasterised directly into the generated PNGs, while the HTML report additionally exposes the same vectors as toggleable overlays.
+The generated PNG overlays are therefore a regression target for future versions. V0.4.1 makes the underlying PNG renderer itself authoritative: Historic England layers are rasterised directly into the generated PNGs, while the HTML report additionally exposes the same vectors as toggleable overlays.
 
 ## LiDAR source
 
@@ -92,11 +92,11 @@ prospector analyse --latitude 50.8657 --longitude -0.2405 \
   --os-data /path/to/os-openmap-local-tq.zip
 ```
 
-A GeoPackage, Shapefile ZIP or extracted vector directory can be supplied. V0.4.0 also queries OpenStreetMap as a supplementary source for paths, tracks, fences, hedges and buildings.
+A GeoPackage, Shapefile ZIP or extracted vector directory can be supplied. V0.4.1 also queries OpenStreetMap as a supplementary source for paths, tracks, fences, hedges and buildings.
 
 ## Coordinate naming
 
-The CLI remains coordinate-driven. V0.4.0 also performs an optional reverse-geocode lookup so the report can display a human-readable location name while retaining the exact latitude/longitude as the authoritative input. The default provider is Nominatim; set `PROSPECTOR_GEOCODER_URL` to use another compatible reverse-geocoder, or use `--no-location` to disable the lookup.
+The CLI remains coordinate-driven. V0.4.1 also performs an optional reverse-geocode lookup so the report can display a human-readable location name while retaining the exact latitude/longitude as the authoritative input. The default provider is Nominatim; set `PROSPECTOR_GEOCODER_URL` to use another compatible reverse-geocoder, or use `--no-location` to disable the lookup.
 
 The result is cached as normal Prospector provenance and is not used by the detector.
 
@@ -110,7 +110,7 @@ The satellite signal is deliberately **supporting evidence**, not a classifier. 
 
 ## Detection model
 
-The V0.4.0 detector is intentionally transparent and reproducible:
+The V0.4.1 detector is intentionally transparent and reproducible:
 
 ```text
 LiDAR DTM
@@ -181,11 +181,27 @@ The exact set of files depends on whether external providers succeeded.
 
 ## Install
 
+Prospector is intended to run from the project's local `.venv`. The release includes an installer that always invokes the virtual environment's interpreter, so the console script is placed in `.venv/bin/` rather than the user Python installation.
+
 ```bash
-python3.12 -m venv .venv
+./install.sh
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[all]'
+prospector --version
+```
+
+For a fully explicit install without activating the environment:
+
+```bash
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install --no-user -e '.[all]'
+.venv/bin/prospector --version
+```
+
+Do not use a system/user-site `pip` to install Prospector. The important invariant is that these two commands agree:
+
+```bash
+.venv/bin/python -m pip -V
+.venv/bin/prospector --version
 ```
 
 ## Analyse
@@ -220,7 +236,7 @@ The external datasets remain under their respective upstream licences/terms. The
 
 ## Development philosophy
 
-V0.4.0 is deliberately a hybrid discovery system rather than an opaque model. Each candidate records the terrain signals that produced it. Human-reviewed candidate outcomes should eventually become the project's most valuable training data; that corpus can support a future supervised classifier without removing the transparent detector.
+V0.4.1 is deliberately a hybrid discovery system rather than an opaque model. Each candidate records the terrain signals that produced it. Human-reviewed candidate outcomes should eventually become the project's most valuable training data; that corpus can support a future supervised classifier without removing the transparent detector.
 
 ### Fast OS context
 

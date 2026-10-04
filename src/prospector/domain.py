@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from pyproj import Transformer
@@ -59,6 +59,6 @@ class Run:
 
     @classmethod
     def create(cls, area: StudyArea, application_version: str, path: str) -> "Run":
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         run_id = now.strftime("%Y%m%dT%H%M%SZ") + f"-{uuid4().hex[:8]}"
         return cls(run_id, area, now, application_version, path)

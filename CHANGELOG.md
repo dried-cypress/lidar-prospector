@@ -1,3 +1,16 @@
+# Changelog
+
+## 0.4.1 — satellite/install hardening
+
+- Added a deterministic project-local installer using `.venv/bin/python` and `pip --no-user`.
+- Added a runtime guard so an accidentally resolved `~/.local/bin/prospector` cannot run an analysis with the wrong Python environment.
+- Added `python -m prospector` support.
+- Updated installation documentation to prevent accidental user-site installation.
+- Sentinel-2 preview now prefers the collection's `visual` asset, avoiding three additional asset-signing requests.
+- Added per-run signed-HREF caching and optional `PC_SDK_SUBSCRIPTION_KEY` support for Planetary Computer rate-limit tiering.
+- Sentinel preview PNG generation no longer imports Matplotlib, reducing unnecessary dependency coupling.
+- Added regression coverage for the RGB preview path.
+
 ## 0.4.0
 
 - Replace the threshold-only terrain detector with a hybrid multi-signal discovery engine combining multi-scale relief persistence, Hough-supported linear structure, annular/ring response, ridge/valley morphology, local texture/coherence, Historic England morphology similarity, and per-AOI unsupervised IsolationForest terrain novelty.
@@ -58,6 +71,12 @@
 # Changelog
 
 ## Unreleased
+
+## 0.4.1
+
+- Restore support for Python 3.10.
+- Allow scikit-learn 1.7.x on Python 3.10 while permitting newer compatible scikit-learn releases on newer Python versions.
+- Align the Ruff target with Python 3.10.
 
 ## 0.4.0 — Hybrid terrain-pattern detector
 

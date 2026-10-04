@@ -836,7 +836,7 @@ def detect_terrain_anomalies(
         output = _write_diagnostic_raster(diagnostic_dir / filename, values, dtm_path)
         diagnostic_outputs[filename.removesuffix(".tif").replace("-", "_")] = str(output)
     if not valid.any():
-        return [], {"name": "hybrid-terrain-pattern-detector", "version": "0.4.0", "status": "no-data"}
+        return [], {"name": "hybrid-terrain-pattern-detector", "version": "0.4.1", "status": "no-data"}
 
     threshold = float(np.percentile(discovery[valid], profile.threshold_percentile))
     seed_threshold = float(np.percentile(discovery[valid], profile.seed_percentile))
@@ -1109,7 +1109,7 @@ def detect_terrain_anomalies(
 
     metadata = {
         "name": "hybrid-terrain-pattern-detector",
-        "version": "0.4.0",
+        "version": "0.4.1",
         "sensitivity": profile.level,
         "sensitivity_description": "1=very conservative, 5=balanced research setting, 10=maximum exploratory recall",
         "workers_requested": workers,

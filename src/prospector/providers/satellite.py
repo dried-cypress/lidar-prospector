@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,9 +33,10 @@ class SatelliteProvider:
 
     def __init__(self, client: HttpClient) -> None:
         self.client = client
+        self._signed_href_cache: dict[str, str] = {}
 
     def _search(self, bbox_wgs84: tuple[float, float, float, float]) -> tuple[list[dict[str, Any]], CachedResponse]:
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         start = now - timedelta(days=365 * 3)
         west, south, east, north = bbox_wgs84
         params = {
@@ -79,16 +80,27 @@ class SatelliteProvider:
         return selected
 
     def _signed_href(self, href: str) -> str:
-        # SAS links are deliberately not cached: they expire. STAC discovery and
-        # finished rasters are cached, but a signed asset URL must be refreshed.
-        # The Planetary Computer signing endpoint can return transient 429s when
-        # several Sentinel assets are requested in quick succession, so respect
-        # Retry-After when present and retry a small number of times.
+        cached = self._signed_href_cache.get(href)
+        if cached:
+            return cached
+
+        # SAS links are short-lived, so cache them only for the duration of one
+        # analysis. This prevents the same asset being signed repeatedly (which
+        # is especially important for Sentinel preview generation).
+        # Planetary Computer documents that a subscription key raises the rate
+        # limit tier; use it when the operator supplies PC_SDK_SUBSCRIPTION_KEY.
+        import os
+
         last_response = None
+        headers = {}
+        subscription_key = os.getenv("PC_SDK_SUBSCRIPTION_KEY")
+        if subscription_key:
+            headers["Ocp-Apim-Subscription-Key"] = subscription_key
         for attempt in range(3):
             response = self.client.session.get(
                 SIGN_URL,
                 params={"href": href},
+                headers=headers,
                 timeout=self.client.timeout,
             )
             last_response = response
@@ -97,7 +109,9 @@ class SatelliteProvider:
                 payload = response.json()
                 if not isinstance(payload, dict) or not isinstance(payload.get("href"), str):
                     raise ValueError("Planetary Computer signing API did not return a signed href")
-                return payload["href"]
+                signed_href = payload["href"]
+                self._signed_href_cache[href] = signed_href
+                return signed_href
 
             if attempt == 2:
                 response.raise_for_status()
@@ -130,9 +144,9 @@ class SatelliteProvider:
         signed = self._signed_href(href)
         with rasterio.Env(
             CPL_VSIL_CURL_ALLOWED_EXTENSIONS=".tif,.tiff,.jp2",
-            VSI_CACHE="FALSE",
-            CPL_VSIL_CURL_CACHE_SIZE="0",
-            GDAL_CACHEMAX="64",
+            VSI_CACHE=False,
+            CPL_VSIL_CURL_CACHE_SIZE=0,
+            GDAL_CACHEMAX=64,
         ):
             with rasterio.open(signed) as dataset:
                 transformer = Transformer.from_crs("EPSG:27700", dataset.crs, always_xy=True)
@@ -155,6 +169,46 @@ class SatelliteProvider:
                 data = dataset.read(1, window=window, boundless=True, masked=True).filled(np.nan).astype("float32")
                 transform = dataset.window_transform(window)
                 return data, transform, str(dataset.crs)
+
+    def _read_asset_window_bands(
+        self,
+        href: str,
+        dtm_bounds: tuple[float, float, float, float],
+    ) -> tuple[np.ndarray, Any, str]:
+        """Read all RGB bands from one remote COG window using one signed URL."""
+        import rasterio
+        from rasterio.windows import Window, from_bounds
+
+        signed = self._signed_href(href)
+        with rasterio.Env(
+            CPL_VSIL_CURL_ALLOWED_EXTENSIONS=".tif,.tiff,.jp2",
+            VSI_CACHE=False,
+            CPL_VSIL_CURL_CACHE_SIZE=0,
+            GDAL_CACHEMAX=64,
+        ):
+            with rasterio.open(signed) as dataset:
+                if dataset.count < 3:
+                    raise ValueError("Satellite visual asset does not contain three colour bands")
+                transformer = Transformer.from_crs("EPSG:27700", dataset.crs, always_xy=True)
+                corners = [
+                    transformer.transform(dtm_bounds[0], dtm_bounds[1]),
+                    transformer.transform(dtm_bounds[2], dtm_bounds[1]),
+                    transformer.transform(dtm_bounds[0], dtm_bounds[3]),
+                    transformer.transform(dtm_bounds[2], dtm_bounds[3]),
+                ]
+                xs = [item[0] for item in corners]
+                ys = [item[1] for item in corners]
+                window = from_bounds(min(xs), min(ys), max(xs), max(ys), dataset.transform)
+                window = window.round_offsets().round_lengths()
+                window = Window(
+                    int(window.col_off),
+                    int(window.row_off),
+                    max(1, int(window.width)),
+                    max(1, int(window.height)),
+                )
+                data = dataset.read(indexes=[1, 2, 3], window=window, boundless=True, masked=True)
+                data = data.filled(np.nan).astype("float32")
+                return data, dataset.window_transform(window), str(dataset.crs)
 
     @staticmethod
     def _reproject(
@@ -265,21 +319,57 @@ class SatelliteProvider:
         scale = max(1e-5, 1.4826 * mad)
         return np.clip(residual / (6.0 * scale), 0.0, 1.0).astype("float32")
 
-    @staticmethod
-    def _preview_rgb(scene: dict[str, Any], provider: "SatelliteProvider", dtm_path: Path, dtm_bounds: tuple[float, float, float, float], target_shape: tuple[int, int], target_transform: Any, output_path: Path) -> Path | None:
-        import matplotlib
+    def _preview_rgb(
+        self,
+        scene: dict[str, Any],
+        dtm_bounds: tuple[float, float, float, float],
+        target_shape: tuple[int, int],
+        target_transform: Any,
+        output_path: Path,
+    ) -> Path | None:
+        """Create an AOI-aligned RGB PNG, preferring Sentinel's pre-rendered visual asset.
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        Sentinel-2 L2A exposes a `visual` asset specifically intended for true-colour
+        rendering. Using it means one signing request instead of independently
+        signing B04/B03/B02 during preview generation.
+        """
+        import rasterio
+        from rasterio.io import MemoryFile
 
-        arrays: list[np.ndarray] = []
-        for key in ("B04", "B03", "B02"):
-            href = provider._asset_href(scene, key)
-            if href is None:
-                return None
-            array, source_transform, source_crs = provider._read_asset_window(href, dtm_bounds, target_shape)
-            arrays.append(provider._reproject(array, source_transform, source_crs, target_shape, target_transform))
-        stack = np.stack(arrays, axis=-1)
+        visual_href = self._asset_href(scene, "visual")
+        if visual_href is not None:
+            data, source_transform, source_crs = self._read_asset_window_bands(
+                visual_href, dtm_bounds
+            )
+            bands: list[np.ndarray] = []
+            for band in data:
+                bands.append(
+                    self._reproject(
+                        band,
+                        source_transform,
+                        source_crs,
+                        target_shape,
+                        target_transform,
+                    )
+                )
+            stack = np.stack(bands, axis=-1)
+        else:
+            # Compatibility fallback for STAC items without the visual asset.
+            arrays: list[np.ndarray] = []
+            for key in ("B04", "B03", "B02"):
+                href = self._asset_href(scene, key)
+                if href is None:
+                    return None
+                array, source_transform, source_crs = self._read_asset_window(
+                    href, dtm_bounds, target_shape
+                )
+                arrays.append(
+                    self._reproject(
+                        array, source_transform, source_crs, target_shape, target_transform
+                    )
+                )
+            stack = np.stack(arrays, axis=-1)
+
         valid = np.isfinite(stack).all(axis=2)
         if not valid.any():
             return None
@@ -288,15 +378,14 @@ class SatelliteProvider:
         high = np.nanpercentile(image, 98, axis=(0, 1))
         span = np.maximum(high - low, 1e-6)
         image = np.clip((image - low) / span, 0.0, 1.0)
+        image_u8 = np.rint(image * 255.0).astype("uint8")
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig, ax = plt.subplots(figsize=(12, 9), dpi=150)
-        try:
-            fig.subplots_adjust(0, 0, 1, 1)
-            ax.imshow(image, origin="upper")
-            ax.axis("off")
-            fig.savefig(output_path, bbox_inches=None, facecolor="white", pad_inches=0)
-        finally:
-            plt.close(fig)
+        height, width = image_u8.shape[:2]
+        with MemoryFile() as memory:
+            with memory.open(driver="PNG", height=height, width=width, count=3, dtype="uint8") as png:
+                png.write(np.moveaxis(image_u8, 2, 0))
+            output_path.write_bytes(memory.read())
         return output_path
 
     def acquire(self, bbox_bng: tuple[float, float, float, float], dtm_path: Path, run_dir: Path) -> SatelliteResult:
@@ -383,8 +472,6 @@ class SatelliteProvider:
             try:
                 preview_path = self._preview_rgb(
                     preview_scene,
-                    self,
-                    dtm_path,
                     bbox_bng,
                     target_shape,
                     target_transform,
@@ -409,7 +496,8 @@ class SatelliteProvider:
                         for item in scenes
                     ],
                     "support_description": "Median multi-scene local NDVI anomaly, used as contextual evidence rather than an archaeological classifier.",
-                    "preview_description": "Optional RGB Sentinel-2 image aligned to the study DTM for visual inspection.",
+                    "preview_description": "Optional RGB Sentinel-2 visual asset aligned to the study DTM for visual inspection.",
+                    "preview_asset": "visual",
                 }
             )
         except Exception as exc:

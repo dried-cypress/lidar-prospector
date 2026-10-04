@@ -273,3 +273,67 @@ def test_location_provider_selects_english_name_and_caches_result(tmp_path: Path
     assert result.display_name == "Thundersbarrow, West Sussex, England, United Kingdom"
     assert result.error is None
     assert result.metadata["attribution"] == "© OpenStreetMap contributors"
+
+
+def test_satellite_visual_preview_uses_single_signed_asset(monkeypatch, tmp_path: Path) -> None:
+    import warnings
+    from rasterio.errors import NotGeoreferencedWarning
+    from rasterio.transform import from_origin
+    from prospector.providers.satellite import SatelliteProvider
+
+    provider = SatelliteProvider(None)  # type: ignore[arg-type]
+    calls = []
+
+    def fake_signed(href: str) -> str:
+        calls.append(href)
+        return href
+
+    monkeypatch.setattr(provider, "_signed_href", fake_signed)
+
+    class FakeDataset:
+        count = 3
+        crs = "EPSG:27700"
+        transform = from_origin(0, 10, 1, 1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, indexes, window, boundless, masked):
+            assert indexes == [1, 2, 3]
+            import numpy as np
+            from numpy.ma import masked_array
+            return masked_array(np.ones((3, 10, 10), dtype="uint8"))
+
+        def window_transform(self, window):
+            return self.transform
+
+    class FakeRasterio:
+        pass
+
+    # Exercise the method directly by replacing rasterio.open/Env in the module
+    # import namespace used at runtime.
+    import rasterio
+    monkeypatch.setattr(rasterio, "open", lambda *_a, **_k: FakeDataset())
+    monkeypatch.setattr(rasterio, "Env", lambda **_kwargs: __import__("contextlib").nullcontext())
+
+    def fake_reproject(data, *_args, **_kwargs):
+        return data
+
+    monkeypatch.setattr(provider, "_reproject", staticmethod(fake_reproject))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NotGeoreferencedWarning)
+        output = provider._preview_rgb(
+            {"assets": {"visual": {"href": "visual.tif"}}},
+            (0, 0, 5, 5),
+            (10, 10),
+            from_origin(0, 10, 1, 1),
+            tmp_path / "preview.png",
+        )
+    assert output is not None
+    assert calls == ["visual.tif"]
+    assert output.read_bytes().startswith(b"\x89PNG")
+

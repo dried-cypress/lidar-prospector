@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -61,7 +61,7 @@ def test_satellite_scene_selection_spreads_dates() -> None:
     from prospector.providers.satellite import SatelliteProvider
 
     scenes = []
-    base = datetime(2026, 9, 1, tzinfo=UTC)
+    base = datetime(2026, 9, 1, tzinfo=timezone.utc)
     for index in range(12):
         scenes.append(
             {
