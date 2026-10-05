@@ -47,6 +47,8 @@ htmlcov/
 # Prospector generated / runtime data
 # ============================================================
 
+project/
+
 # Local downloaded source data and caches
 data/
 project/data/

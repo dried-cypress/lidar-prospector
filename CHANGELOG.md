@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+- Fixed the Docker geospatial/training image by installing required native runtime libraries for compiled wheels.
+- Added explicit `libexpat1` validation for Fiona/GDAL and `libgomp1` validation for the scientific/ML stack.
+- Made the Docker dependency smoke test verify both Python imports and native shared libraries.
+
 ## 0.5.1
 
 - Fixed Docker training images installing Prospector without the geospatial extras required by LiDAR validation and dataset generation.

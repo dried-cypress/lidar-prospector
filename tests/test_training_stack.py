@@ -54,4 +54,4 @@ def test_readme_documents_docker_geospatial_rebuild() -> None:
     root = Path(__file__).parents[1]
     text = (root / "README.md").read_text(encoding="utf-8")
     assert "docker compose build --no-cache app trainer" in text
-    assert "V0.5.1" in text
+    assert "V0.5.2" in text

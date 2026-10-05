@@ -50,7 +50,7 @@ def test_detect_terrain_anomalies_returns_candidates(tmp_path: Path) -> None:
 
     candidates, metadata = detect_terrain_anomalies(dtm, [])
     assert metadata["name"] == "hybrid-terrain-pattern-detector"
-    assert metadata["version"] == "0.5.1"
+    assert metadata["version"] == "0.5.2"
     assert metadata["sensitivity"] == 5
     assert metadata["machine_learning"]["model"] == "IsolationForest"
     assert candidates
