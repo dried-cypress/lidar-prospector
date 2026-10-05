@@ -1,27 +1,11 @@
-cp .env.example .env
+Prospector training stack: ingest a small Historic England area, build LiDAR-backed training examples, train a local archaeology model, and use that model during normal Prospector analysis.
 
-# Start stack
 docker compose up -d
-
-# Initialise training database
+docker compose build --no-cache app trainer
+docker compose up -d app trainer
 docker compose run --rm trainer prospector train init
-
-# Ingest Historic Englang in mangeable chunks
-docker compose run --rm trainer prospector train ingest-he \
-  --xmin 518000 --ymin 104000 \
-  --xmax 528000 --ymax 114000
-
-# Build LiDAR0backed training example
-docker compose run --rm trainer prospector train build-dataset \
-  --xmin 518000 --ymin 104000 \
-  --xmax 528000 --ymax 114000 \
-  --tile-size 1000 \
-  --max-tiles 25 \
-  --max-features 100
-
-# 'Fit' the first model
-docker compose run --rm trainer prospector train fit \
-  --dataset project/training/datasets/<dataset>/training-dataset.npz
-
-# Inspect the corpus/model registry
+docker compose run --rm trainer prospector train ingest-he --xmin 518000 --ymin 104000 --xmax 528000 --ymax 114000
+docker compose run --rm trainer prospector train build-dataset --download-lidar --xmin 518000 --ymin 104000 --xmax 528000 --ymax 114000 --tile-size 1000 --max-tiles 25 --max-features 100
+docker compose run --rm trainer prospector train fit --dataset project/training/datasets/<dataset>/training-dataset.npz
 docker compose run --rm trainer prospector train status
+prospector analyse --latitude 50.8620 --longitude -0.2547

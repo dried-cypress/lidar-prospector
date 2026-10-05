@@ -1656,7 +1656,7 @@ def detect_terrain_anomalies(
 
     metadata = {
         "name": "hybrid-terrain-pattern-detector",
-        "version": "0.5.0",
+        "version": "0.5.1",
         "sensitivity": profile.level,
         "sensitivity_description": "1=very conservative, 5=balanced research setting with HE recall validation, 10=maximum exploratory recall",
         "workers_requested": workers,

@@ -1,12 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+- Fixed Docker training images installing Prospector without the geospatial extras required by LiDAR validation and dataset generation.
+- Expanded the `all` extra explicitly instead of recursively referencing Prospector's own extras.
+- Added Docker build-time imports to fail the image build if a required geospatial/training dependency is missing.
+- Disabled Python user-site package discovery inside the Docker image.
+- Added `notes.txt` as a concise training-stack cheatsheet.
+
 ## 0.5.0
 
-- Added local archaeological training pipeline with PostgreSQL/PostGIS.
-- Added chunked Historic England AIM ingestion for Detailed_Mapping, Monument_Extents and Project_Area.
-- Added LiDAR-backed, multi-scale and rotation-augmented training examples.
-- Added grouped hold-out training with StandardScaler + PCA + ExtraTreesClassifier.
-- Added local model registry and `project/models/current.joblib` inference integration.
-- Added `prospector train init|ingest-he|build-dataset|fit|status` commands.
-- Added Docker Compose stack for database, analysis and trainer services.
-- Preserved existing coordinate-driven analysis and report generation as the production path while the learned system matures.
+- Added the local HE/LiDAR training stack, PostGIS catalogue, dataset generation, model training and model-backed inference.

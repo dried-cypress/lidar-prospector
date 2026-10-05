@@ -86,8 +86,8 @@ class LidarProvider:
             import rasterio
         except ImportError as exc:
             raise RuntimeError(
-                "LiDAR validation requires the geospatial extras. "
-                "Install with: pip install -e '.[geo]'"
+                "LiDAR validation requires Rasterio/NumPy geospatial dependencies. "
+                "Install with: pip install -e '.[geo]' or rebuild the Docker trainer image."
             ) from exc
 
         with rasterio.MemoryFile(data) as memory_file:

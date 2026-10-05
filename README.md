@@ -2,9 +2,11 @@
 
 Prospector is a reproducible archaeological landscape prospection tool for combining LiDAR terrain data with heritage, modern-feature and satellite context.
 
-## Version 0.4.4
+## Version 0.5.1
 
 V0.4.4 is the detector-focused release, with Python 3.10 compatibility restored. It keeps the established LiDAR visualisation while adding a hybrid terrain-pattern detector designed to find archaeological-looking structures that do not resemble a single bright local-relief blob.
+
+V0.5.1 is the training-stack maintenance release. It fixes Docker training images so the geospatial and training dependency sets are installed explicitly, adds build-time dependency verification, and retains the local-first HE/LiDAR learning pipeline introduced in V0.5.0.
 
 The detector now:
 
@@ -234,6 +236,42 @@ Do not use a system/user-site `pip` to install Prospector. The important invaria
 .venv/bin/python -m pip -V
 .venv/bin/prospector --version
 ```
+
+## Docker training stack
+
+V0.5.1's Docker image explicitly installs the `geo` and `training` extras. The image build verifies that Rasterio, NumPy, SciPy, scikit-image, Matplotlib, Pillow, Fiona, Joblib, psycopg and the related geospatial dependencies import successfully before the image is accepted.
+
+After updating a checkout to V0.5.1, you do not need to stop the database container. Rebuild the application/trainer images so the corrected dependency set is installed:
+
+```bash
+docker compose build --no-cache app trainer
+docker compose up -d app trainer
+```
+
+Then initialise or inspect the training stack as normal:
+
+```bash
+docker compose run --rm trainer prospector train init
+docker compose run --rm trainer prospector train status
+```
+
+For a small first training area:
+
+```bash
+docker compose run --rm trainer prospector train ingest-he \
+  --xmin 518000 --ymin 104000 \
+  --xmax 528000 --ymax 114000
+
+docker compose run --rm trainer prospector train build-dataset \
+  --download-lidar \
+  --xmin 518000 --ymin 104000 \
+  --xmax 528000 --ymax 114000 \
+  --tile-size 1000 \
+  --max-tiles 25 \
+  --max-features 100
+```
+
+The `build-dataset` step requires the geospatial dependencies and is therefore intentionally run in the trainer image.
 
 ## Analyse
 
