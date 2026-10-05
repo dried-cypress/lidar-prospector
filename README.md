@@ -2,9 +2,9 @@
 
 Prospector is a reproducible archaeological landscape prospection tool for combining LiDAR terrain data with heritage, modern-feature and satellite context.
 
-## Version 0.4.2
+## Version 0.4.3
 
-V0.4.2 is the detector-focused release, with Python 3.10 compatibility restored. It keeps the established LiDAR visualisation while adding a hybrid terrain-pattern detector designed to find archaeological-looking structures that do not resemble a single bright local-relief blob.
+V0.4.3 is the detector-focused release, with Python 3.10 compatibility restored. It keeps the established LiDAR visualisation while adding a hybrid terrain-pattern detector designed to find archaeological-looking structures that do not resemble a single bright local-relief blob.
 
 The detector now:
 
@@ -15,9 +15,9 @@ The detector now:
 - optionally accepts local OS OpenMap Local data with `--os-data`
 - supplements OS transport/building coverage with OpenStreetMap paths, tracks, fences, hedges and buildings
 - creates a soft modernity penalty rather than blindly deleting every mapped path or boundary
-- acquires multi-scene Sentinel-2 L2A imagery from the Microsoft Planetary Computer public STAC catalogue
+- uses Sentinel-2 only as optional spectral context and downloads high-resolution Esri World Imagery for visual inspection
 - derives a multi-scene satellite spectral-support raster from local NDVI anomalies
-- compares candidate geometry against known Historic England AIM feature geometry as a deterministic similarity prior
+- compares candidate geometry against known Historic England AIM feature geometry as a deterministic LiDAR terrain-signature reference prior
 - measures annular/ring response for enclosures, barrows and bank-like closed forms
 - measures ridge/valley response for scarps, hollow ways, terraces and subtle earthworks
 - measures local texture and surface coherence so visually distinctive terrain is not lost by a single threshold
@@ -28,7 +28,7 @@ The ML component is deliberately **not an AI service and is not a trained archae
 
 ## Locked LiDAR visualisation
 
-The established archaeological hillshade presentation is kept stable in V0.4.2:
+The established archaeological hillshade presentation is kept stable in V0.4.3:
 
 - 8-direction multidirectional hillshade at 38° altitude
 - blended 70% multidirectional / 30% conventional north-west illumination at 42° altitude
@@ -37,7 +37,7 @@ The established archaeological hillshade presentation is kept stable in V0.4.2:
 - restrained 0.14 elevation tint in the LiDAR/AIM image
 - the anomaly/combined image renderer continues to use the same hillshade and relief visualisation settings as V0.2.1
 
-The generated PNG overlays are therefore a regression target for future versions. V0.4.2 makes the underlying PNG renderer itself authoritative: Historic England layers are rasterised directly into the generated PNGs, while the HTML report additionally exposes the same vectors as toggleable overlays.
+The generated PNG overlays are therefore a regression target for future versions. V0.4.3 keeps the underlying PNG renderer authoritative: Historic England layers are rasterised directly into the generated PNGs, while the HTML report additionally exposes the same vectors as toggleable overlays.
 
 ## LiDAR source
 
@@ -53,9 +53,9 @@ The pinned England coverage is:
 
 Historic England's **Detailed_Mapping** service remains the authoritative known-archaeology layer, while Monument_Extents and Project_Area are also retrieved for faithful Aerial Archaeology Mapping visualisation. Prospector consumes the underlying ArcGIS FeatureServer directly rather than scraping the Experience Builder application, so the data acquisition is independent of the Explorer's zoom-dependent presentation. V0.3.5 resolved the live FeatureServer by published layer name and paginates all vector results, preventing a full first response from hiding additional features. Historic England also notes that earlier hand-drawn projects remain raster-only and are not currently downloadable from this vector service.
 
-1. Detailed_Mapping features are excluded from candidate generation using a small buffer so the detector does not reproduce existing outlines;
-2. Monument_Extents form a hard registered-area exclusion, while candidates crossing a mapped detailed feature can retain their unregistered outside geometry;
-3. known feature geometry provides only a weak contextual similarity signal and cannot manufacture candidates;
+1. Detailed_Mapping features are used as positive detector references first, then their mapped areas are removed from the final discovery candidate set using a small buffer;
+2. Monument_Extents form a hard registered-area exclusion only after detector validation, while candidates crossing a mapped detailed feature can retain their unregistered outside geometry;
+3. the detector compares LiDAR-derived terrain signatures against known HE references; the HE reference bank does not replace candidate generation or manufacture terrain evidence;
 4. a dedicated multi-scale linear response and probabilistic Hough seeding recover long straight banks, ditches and scarps;
 5. candidate generation remains independent of Historic England and works with zero known records.
 
@@ -80,6 +80,13 @@ Softer suppression is applied to:
 - other mapped boundaries
 
 This distinction matters because archaeological routeways and boundaries can survive beneath or alongside modern ones.
+
+
+### High-resolution visual imagery
+
+Prospector uses **[Esri World Imagery](https://developers.arcgis.com/rest/basemap-styles/service-data/)** as the visual aerial/satellite base layer in the interactive report. The application requests an AOI-aligned PNG from the World Imagery map service at up to 2048 pixels across, so a 1 km study area is rendered at roughly 0.49 m per output pixel. Source resolution varies by location: World Imagery is a compilation of satellite and aerial imagery, with high-resolution sources used in many areas.
+
+Sentinel-2 is retained only as optional spectral context for detector scoring. It is no longer used as the visual base layer because its 10 m imagery is not appropriate for detailed inspection of small archaeological earthworks.
 
 ### OS Data Hub API signup
 
@@ -110,11 +117,11 @@ prospector analyse --latitude 50.8657 --longitude -0.2405 \
   --os-data /path/to/os-openmap-local-tq.zip
 ```
 
-A GeoPackage, Shapefile ZIP or extracted vector directory can be supplied. V0.4.2 also queries OpenStreetMap as a supplementary source for paths, tracks, fences, hedges and buildings.
+A GeoPackage, Shapefile ZIP or extracted vector directory can be supplied. V0.4.3 also queries OpenStreetMap as a supplementary source for paths, tracks, fences, hedges and buildings.
 
 ## Coordinate naming
 
-The CLI remains coordinate-driven. V0.4.2 also performs an optional reverse-geocode lookup so the report can display a human-readable location name while retaining the exact latitude/longitude as the authoritative input. The default provider is Nominatim; set `PROSPECTOR_GEOCODER_URL` to use another compatible reverse-geocoder, or use `--no-location` to disable the lookup.
+The CLI remains coordinate-driven. V0.4.3 also performs an optional reverse-geocode lookup so the report can display a human-readable location name while retaining the exact latitude/longitude as the authoritative input. The default provider is Nominatim; set `PROSPECTOR_GEOCODER_URL` to use another compatible reverse-geocoder, or use `--no-location` to disable the lookup.
 
 The result is cached as normal Prospector provenance and is not used by the detector.
 
@@ -122,13 +129,13 @@ The result is cached as normal Prospector provenance and is not used by the dete
 
 Prospector uses Sentinel-2 Level-2A data via the Microsoft Planetary Computer STAC API. The service exposes a public STAC catalogue and Sentinel-2 data without requiring a user account for catalogue discovery; file access uses short-lived signed asset URLs. An optional `PC_SDK_SUBSCRIPTION_KEY` can be exported to use the Planetary Computer subscription-key rate-limit tier.
 
-For each run, Prospector selects several relatively clear observations across time rather than trusting a single image. It calculates local NDVI anomaly support for each scene and uses the median support across selected scenes when ranking candidates. The selected scene also produces an AOI-aligned PNG preview which is exposed as the **Sentinel-2** base option in the interactive evidence map alongside the LiDAR bases.
+For each run, Prospector selects several relatively clear observations across time rather than trusting a single image. It calculates local NDVI anomaly support for each scene and uses the median support across selected scenes when ranking candidates. Sentinel-2 does not produce a visual base image in the interactive map. High-resolution Esri World Imagery provides the visual aerial/satellite base instead; Sentinel-2 remains an optional spectral support layer for detector scoring.
 
-The satellite signal is deliberately **supporting evidence**, not a classifier. Cropmarks and vegetation responses may strengthen a candidate, but modern vegetation boundaries can also produce a response and are handled separately through mapped context. Satellite scenes are streamed as remote COG windows; Prospector stores the derived support raster, a report preview and STAC provenance rather than copying complete Sentinel-2 scenes into every run.
+The spectral signal is deliberately **supporting evidence**, not a classifier. Cropmarks and vegetation responses may strengthen a candidate, but modern vegetation boundaries can also produce a response and are handled separately through mapped context. Sentinel-2 scenes are streamed as remote COG windows; Prospector stores the derived support raster and STAC provenance rather than copying complete Sentinel-2 scenes into every run.
 
 ## Detection model
 
-The V0.4.2 detector is intentionally transparent and reproducible:
+The V0.4.3 detector is intentionally transparent and reproducible:
 
 ```text
 LiDAR DTM
@@ -140,14 +147,14 @@ LiDAR DTM
    +--> annular/ring response
    +--> ridge/valley response + local texture/coherence
    +--> unsupervised Isolation Forest terrain novelty
-   +--> mask registered archaeology before components are built
+   +--> generate candidates before Historic England exclusion, then validate known archaeology and remove matched areas from discovery output
    +--> connected candidate regions
             |
             +--> geometry / morphology
             +--> terrain-pattern channel scores
             +--> modern context penalty
             +--> satellite spectral support
-            +--> Historic England geometry similarity
+            +--> Historic England LiDAR terrain-signature similarity
                         |
                         v
                   final ranked score
@@ -182,7 +189,7 @@ overlays/
   lidar-aim.png
   lidar-anomalies.png
   lidar-anomalies-aim.png
-  satellite-latest.png
+  high-resolution-imagery.png
   lidar-base.png
   lidar-anomalies-base.png
 
@@ -196,6 +203,12 @@ run.json
 ```
 
 The exact set of files depends on whether external providers succeeded.
+
+## Detection validation and learning
+
+From v0.4.3, Prospector deliberately detects terrain before applying the Historic England exclusion mask. The known Historic England geometries are used as positive reference examples from the current LiDAR DTM, and the report measures how many known features the detector rediscovers. Those matched features are then removed from the final unknown-candidate set.
+
+This gives each run a useful recall metric such as `43 / 51 known features validated` instead of silently hiding known archaeology before detection. Candidate similarity is based on LiDAR-derived terrain signatures (shape, multi-scale relief and morphology channels), not on the rendered PNG. The current model is label-guided within the study area rather than a general archaeological classifier; reviewed false positives and missed HE features should become the next training corpus.
 
 ## Install
 
@@ -254,7 +267,7 @@ The external datasets remain under their respective upstream licences/terms. The
 
 ## Development philosophy
 
-V0.4.2 is deliberately a hybrid discovery system rather than an opaque model. Each candidate records the terrain signals that produced it. Human-reviewed candidate outcomes should eventually become the project's most valuable training data; that corpus can support a future supervised classifier without removing the transparent detector.
+V0.4.3 is deliberately a hybrid discovery system rather than an opaque model. Each candidate records the terrain signals that produced it. Human-reviewed candidate outcomes should eventually become the project's most valuable training data; that corpus can support a future supervised classifier without removing the transparent detector.
 
 ### Fast OS context
 

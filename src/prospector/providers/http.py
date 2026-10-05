@@ -14,7 +14,7 @@ class CachedResponse:
 class HttpClient:
     _KEY_PATTERN=re.compile(r"[^A-Za-z0-9._-]+")
     def __init__(self,cache_dir:Path,timeout:float=60.0)->None:
-        self.cache_dir=cache_dir; self.timeout=timeout; self.cache_dir.mkdir(parents=True,exist_ok=True); self.session=requests.Session(); self.session.headers.update({"User-Agent":"Prospector/0.4.2 (archaeological research tool)"})
+        self.cache_dir=cache_dir; self.timeout=timeout; self.cache_dir.mkdir(parents=True,exist_ok=True); self.session=requests.Session(); self.session.headers.update({"User-Agent":"Prospector/0.4.3 (archaeological research tool)"})
     @staticmethod
     def _request_digest(url:str,params:dict[str,Any]|None)->str:
         return hashlib.sha256(json.dumps([url,params],sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()

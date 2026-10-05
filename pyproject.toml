@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prospector"
-version = "0.4.2"
+version = "0.4.3"
 description = "Reproducible archaeological landscape prospection from LiDAR and contextual evidence."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,6 +26,7 @@ geo = [
   "scipy>=1.15,<2",
   "scikit-image>=0.25,<1",
   "matplotlib>=3.10,<4",
+  "pillow>=12,<13",
   "fiona>=1.10,<2",
 ]
 dev = [

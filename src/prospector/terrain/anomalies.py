@@ -33,6 +33,8 @@ class TerrainCandidate:
     ring_score: float = 0.0
     ridge_valley_score: float = 0.0
     texture_score: float = 0.0
+    he_match_type: str = ""
+    he_match_uid: str = ""
 
 
 def _fill_invalid(data: np.ndarray) -> np.ndarray:
@@ -503,7 +505,260 @@ def _signature(metrics: dict[str, float]) -> np.ndarray:
     ], dtype="float64")
 
 
+def _he_feature_label(feature: dict[str, Any]) -> str:
+    properties = feature.get("properties") or {}
+    for key in (
+        "MONUMENT_TYPE", "MONUMENT_TYPE_ID", "TYPE", "LAYER",
+        "prospector_aim_layer", "EVIDENCE_1", "source",
+    ):
+        value = str(properties.get(key) or "").strip()
+        if value and value.casefold() not in {"aerial archaeology mapping", "historic england aim"}:
+            return value
+    return "Unknown Historic England feature"
+
+
+def _he_feature_uid(feature: dict[str, Any], index: int) -> str:
+    properties = feature.get("properties") or {}
+    for key in ("HE_UID", "UID", "MONUMENT_UID", "OBJECTID", "FID"):
+        value = str(properties.get(key) or "").strip()
+        if value:
+            return value
+    return f"HE-{index}"
+
+
+def _geometry_buffer_for_reference(geometry: Any, pixel_size_m: float) -> Any:
+    if geometry.geom_type in {"LineString", "MultiLineString", "Point", "MultiPoint"}:
+        return geometry.buffer(max(1.5, pixel_size_m * 1.5))
+    return geometry
+
+
+def _local_mask_values(
+    geometry: Any,
+    raster: np.ndarray,
+    transform: Any,
+    *,
+    buffer_m: float = 0.0,
+) -> np.ndarray:
+    """Extract raster values beneath one geometry using a clipped local window."""
+    from rasterio.features import rasterize
+    from rasterio.windows import Window, from_bounds, transform as window_transform
+
+    if geometry is None or geometry.is_empty:
+        return np.asarray([], dtype="float32")
+    geom = geometry.buffer(buffer_m) if buffer_m > 0 else geometry
+    try:
+        window = from_bounds(*geom.bounds, transform=transform).round_offsets().round_lengths()
+    except Exception:
+        return np.asarray([], dtype="float32")
+    row_off = max(0, int(window.row_off))
+    col_off = max(0, int(window.col_off))
+    row_end = min(raster.shape[0], int(window.row_off + window.height))
+    col_end = min(raster.shape[1], int(window.col_off + window.width))
+    if row_end <= row_off or col_end <= col_off:
+        return np.asarray([], dtype="float32")
+    local = raster[row_off:row_end, col_off:col_end]
+    local_transform = window_transform(
+        Window(col_off, row_off, col_end - col_off, row_end - row_off),
+        transform,
+    )
+    mask = rasterize(
+        [(geom, 1)],
+        out_shape=local.shape,
+        transform=local_transform,
+        fill=0,
+        default_value=1,
+        dtype="uint8",
+        all_touched=True,
+    ).astype(bool)
+    values = local[mask]
+    return values[np.isfinite(values)]
+
+
+def _descriptor_from_metrics_and_channels(
+    metrics: dict[str, float],
+    channel_values: dict[str, np.ndarray],
+    *,
+    include_geometry: bool = True,
+) -> np.ndarray:
+    descriptor: list[float] = list(_signature(metrics)) if include_geometry else []
+    for key in (
+        "discovery", "max_relief", "persistence", "linear",
+        "annular", "ridge_valley", "texture", "coherence", "terrain_novelty",
+    ):
+        values = channel_values.get(key, np.asarray([], dtype="float32"))
+        values = values[np.isfinite(values)]
+        # All detector channels are normalised evidence scores. Clipping here
+        # protects the learned signature from accidentally receiving an
+        # unbounded intermediate (for example a raw multi-scale z-score).
+        values = np.clip(values, 0.0, 1.0)
+        if values.size == 0:
+            descriptor.extend((0.0, 0.0, 0.0))
+        else:
+            descriptor.extend((
+                float(np.quantile(values, 0.50)),
+                float(np.quantile(values, 0.80)),
+                float(np.quantile(values, 0.92)),
+            ))
+    return np.asarray(descriptor, dtype="float64")
+
+
+def _he_reference_bank(
+    aim_features: list[dict[str, Any]],
+    channels: dict[str, np.ndarray],
+    transform: Any,
+    pixel_size_m: float,
+) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    for index, feature in enumerate(aim_features, 1):
+        geometry = _safe_geometry(feature.get("geometry"))
+        if geometry is None or geometry.is_empty:
+            continue
+        sample_geometry = _geometry_buffer_for_reference(geometry, pixel_size_m)
+        values = {
+            key: _local_mask_values(sample_geometry, raster, transform)
+            for key, raster in channels.items()
+        }
+        metrics = _geometry_metrics(geometry)
+        references.append({
+            "uid": _he_feature_uid(feature, index),
+            "label": _he_feature_label(feature),
+            "descriptor": _descriptor_from_metrics_and_channels(metrics, values, include_geometry=False),
+            "geometry_descriptor": _signature(metrics),
+            "geometry": geometry,
+            "feature": feature,
+            "source_index": index - 1,
+            "evidence_q92": {
+                key: (float(np.quantile(item, 0.92)) if item.size else 0.0)
+                for key, item in values.items()
+            },
+        })
+    return references
+
+
+def _he_similarity_against_bank(
+    descriptor: np.ndarray,
+    references: list[dict[str, Any]],
+    *,
+    geometry_descriptor: np.ndarray | None = None,
+    exclude_uid: str | None = None,
+) -> tuple[float, str, str]:
+    if not references:
+        return 0.0, "", ""
+    usable = [item for item in references if item["uid"] != exclude_uid]
+    if not usable:
+        return 0.0, "", ""
+    matrix = np.stack([item["descriptor"] for item in usable], axis=0)
+    centre = np.median(matrix, axis=0)
+    mad = np.median(np.abs(matrix - centre), axis=0)
+    scale = np.maximum(1.4826 * mad, 0.25)
+    distances: list[tuple[float, dict[str, Any]]] = []
+    for reference in usable:
+        if len(usable) == 1:
+            terrain_distance = float(np.sqrt(np.mean((descriptor - reference["descriptor"]) ** 2)))
+        else:
+            terrain_distance = float(np.sqrt(np.mean(((descriptor - reference["descriptor"]) / scale) ** 2)))
+        distance = 0.88 * terrain_distance
+        if geometry_descriptor is not None and "geometry_descriptor" in reference:
+            geometry_scale = np.asarray([4.615, 1.0, 1.0, 1.0, 1.0, 2.0], dtype="float64")
+            geometry_distance = float(
+                np.sqrt(np.mean(((geometry_descriptor - reference["geometry_descriptor"]) / geometry_scale) ** 2))
+            )
+            # Geometry is weak evidence: HE polygons can describe broad mapping extents.
+            distance += 0.12 * geometry_distance
+        distances.append((distance, reference))
+    distance, best = min(distances, key=lambda item: item[0])
+    return float(np.exp(-2.0 * distance)), str(best["label"]), str(best["uid"])
+
+def _known_feature_overlap(
+    geometry: Any,
+    known_geometry: Any,
+    pixel_size_m: float,
+) -> float:
+    if geometry is None or known_geometry is None or geometry.is_empty or known_geometry.is_empty:
+        return 0.0
+    known = _geometry_buffer_for_reference(known_geometry, pixel_size_m)
+    candidate = geometry
+    try:
+        intersection = candidate.intersection(known)
+        if intersection.is_empty:
+            return 0.0
+        known_area = max(float(known.area), 1e-6)
+        candidate_area = max(float(candidate.area), 1e-6)
+        return float(min(1.0, max(
+            float(intersection.area) / known_area,
+            float(intersection.area) / candidate_area,
+        )))
+    except Exception:
+        return 0.0
+
+
+def _evaluate_known_features(
+    aim_features: list[dict[str, Any]],
+    references: list[dict[str, Any]],
+    channels: dict[str, np.ndarray],
+    transform: Any,
+    raw_candidates: list[Any],
+    pixel_size_m: float,
+    level: int,
+) -> list[dict[str, Any]]:
+    evaluations: list[dict[str, Any]] = []
+    for index, reference in enumerate(references, 1):
+        geometry = reference["geometry"]
+        q = reference.get("evidence_q92", {})
+        evidence_score = float(np.clip(
+            0.24 * q.get("discovery", 0.0)
+            + 0.12 * q.get("max_relief", 0.0)
+            + 0.12 * q.get("persistence", 0.0)
+            + 0.12 * q.get("linear", 0.0)
+            + 0.12 * q.get("annular", 0.0)
+            + 0.10 * q.get("ridge_valley", 0.0)
+            + 0.08 * q.get("texture", 0.0)
+            + 0.05 * q.get("terrain_novelty", 0.0)
+            + 0.05 * q.get("coherence", 0.0),
+            0.0, 1.0,
+        ))
+        descriptor = reference["descriptor"]
+        similarity, match_type, match_uid = _he_similarity_against_bank(
+            descriptor, references, exclude_uid=reference["uid"]
+        )
+        best_overlap = 0.0
+        best_candidate_id: int | None = None
+        for candidate_id, candidate in enumerate(raw_candidates, 1):
+            overlap = _known_feature_overlap(candidate, geometry, pixel_size_m)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_candidate_id = candidate_id
+        candidate_detected = best_overlap >= 0.18
+        evidence_detected = evidence_score >= max(0.25, 0.47 - level * 0.018)
+        evaluations.append({
+            "index": index,
+            "source_index": reference["source_index"],
+            "uid": reference["uid"],
+            "type": reference["label"],
+            "candidate_detected": bool(candidate_detected),
+            "evidence_detected": bool(evidence_detected),
+            "validated_detection": bool(candidate_detected and evidence_detected),
+            "evidence_score": 100.0 * evidence_score,
+            "best_candidate_overlap": 100.0 * best_overlap,
+            "best_candidate_id": best_candidate_id,
+            "similarity_to_other_known": 100.0 * similarity,
+            "similarity_match_type": match_type,
+            "similarity_match_uid": match_uid,
+        })
+    return evaluations
+
+
+def _candidate_descriptor(
+    metrics: dict[str, float],
+    channels: dict[str, np.ndarray],
+    pixels: np.ndarray,
+) -> np.ndarray:
+    values = {key: raster[pixels] for key, raster in channels.items()}
+    return _descriptor_from_metrics_and_channels(metrics, values)
+
+
 def _he_signatures(aim_features: list[dict[str, Any]]) -> list[np.ndarray]:
+    # Backwards-compatible geometry-only signatures retained for callers/tests.
     signatures = []
     for feature in aim_features:
         geometry = _safe_geometry(feature.get("geometry"))
@@ -522,7 +777,6 @@ def _he_similarity(candidate_metrics: dict[str, float], signatures: list[np.ndar
     target = _signature(candidate_metrics)
     distance = min(float(np.linalg.norm(target - reference)) for reference in signatures)
     return float(np.exp(-0.70 * distance))
-
 
 def _candidate_raster_values(geometry: Any, raster: np.ndarray, transform: Any) -> np.ndarray:
     from rasterio.features import rasterize
@@ -754,8 +1008,9 @@ def detect_terrain_anomalies(
     max_area_m2: float | None = None,
     max_candidates: int | None = None,
     diagnostic_raster_dir: Path | None = None,
+    exclude_historic_england: bool = True,
 ) -> tuple[list[TerrainCandidate], dict[str, Any]]:
-    """Discover and rank anomalies with deterministic morphology + ML novelty."""
+    """Discover, evaluate against known archaeology, then rank unknown terrain candidates."""
     import rasterio
     from rasterio.features import shapes
     from scipy.ndimage import binary_closing, find_objects, label
@@ -841,7 +1096,7 @@ def detect_terrain_anomalies(
         output = _write_diagnostic_raster(diagnostic_dir / filename, values, dtm_path)
         diagnostic_outputs[filename.removesuffix(".tif").replace("-", "_")] = str(output)
     if not valid.any():
-        return [], {"name": "hybrid-terrain-pattern-detector", "version": "0.4.2", "status": "no-data"}
+        return [], {"name": "hybrid-terrain-pattern-detector", "version": "0.4.3", "status": "no-data"}
 
     threshold = float(np.percentile(discovery[valid], profile.threshold_percentile))
     seed_threshold = float(np.percentile(discovery[valid], profile.seed_percentile))
@@ -854,12 +1109,40 @@ def detect_terrain_anomalies(
         min_line_length_m=profile.min_line_length_m,
         dilation_m=max(1.5, 3.0 - profile.level * 0.12),
     ) & valid
+
+    # Candidate generation is deliberately recall-oriented from v0.4.3 onward.
+    # Several weak-but-correlated terrain channels can seed one candidate even
+    # when no individual channel is extreme. The learned HE reference stage
+    # below then ranks candidates, rather than using HE as a pre-detection mask.
+    seed_percentile = max(88.0, profile.seed_percentile - 4.5)
+    broad_seed_threshold = float(np.percentile(discovery[valid], seed_percentile))
+    channel_percentile = max(86.0, 96.0 - (profile.level - 1) * 0.9)
+    channel_thresholds = {
+        key: float(np.percentile(values[valid], channel_percentile))
+        for key, values in {
+            "discovery": discovery, "persistence": persistence, "linear": linear_score,
+            "annular": annular, "ridge_valley": ridge_valley, "texture": texture,
+            "terrain_novelty": terrain_novelty, "coherence": coherence,
+        }.items()
+    }
+    channel_stack = np.stack([
+        discovery >= channel_thresholds["discovery"],
+        persistence >= channel_thresholds["persistence"],
+        linear_score >= channel_thresholds["linear"],
+        annular >= channel_thresholds["annular"],
+        ridge_valley >= channel_thresholds["ridge_valley"],
+        texture >= channel_thresholds["texture"],
+        terrain_novelty >= channel_thresholds["terrain_novelty"],
+        coherence >= channel_thresholds["coherence"],
+    ], axis=0)
+    multi_signal = np.sum(channel_stack, axis=0) >= (2 if profile.level <= 7 else 1)
     pattern_seed = (
-        (discovery >= seed_threshold)
+        (discovery >= broad_seed_threshold)
+        | multi_signal
         | (linear_score >= linear_threshold)
         | (annular >= annular_threshold)
         | (terrain_novelty >= novelty_threshold)
-        | (ridge_valley >= max(0.55, 0.85 - profile.level * 0.025))
+        | (ridge_valley >= max(0.50, 0.80 - profile.level * 0.025))
     ) & valid
     combined_mask = (
         (discovery >= threshold) | pattern_seed | straight_line_mask
@@ -870,10 +1153,16 @@ def detect_terrain_anomalies(
     detail_mask = _rasterise_geometry_mask(detail_union, shape_out, transform)
     monument_mask = _rasterise_geometry_mask(monument_union, shape_out, transform)
     exclusion_mask = detail_mask | monument_mask
-    combined_mask &= ~exclusion_mask
+    # Keep the raw candidate mask intact for HE recall evaluation. Historic
+    # England is subtracted only when constructing the final unknown-candidate
+    # geometry.
+    raw_combined_mask = combined_mask.copy()
     structure_size = max(3, profile.closing_pixels * 2 + 1)
-    combined_mask = binary_closing(combined_mask, structure=np.ones((structure_size, structure_size), dtype=bool))
-    combined_mask &= ~exclusion_mask
+    raw_combined_mask = binary_closing(raw_combined_mask, structure=np.ones((structure_size, structure_size), dtype=bool))
+    raw_combined_mask &= valid
+    combined_mask = raw_combined_mask.copy()
+    if exclude_historic_england:
+        combined_mask &= ~exclusion_mask
     combined_mask &= valid
     labels, _count = label(combined_mask, structure=np.ones((3, 3), dtype=np.uint8))
     # Avoid repeatedly scanning the entire AOI for every connected component.
@@ -906,11 +1195,35 @@ def detect_terrain_anomalies(
         satellite_metadata = {"enabled": True, "source": str(satellite_support_path)}
 
     pixel_area = abs(x_resolution * y_resolution)
+    raw_labels, _raw_count = label(raw_combined_mask, structure=np.ones((3, 3), dtype=np.uint8))
+    raw_candidate_geometries: list[Any] = []
+    for geometry_data, value in shapes(raw_labels.astype("int32"), mask=raw_labels > 0, transform=transform):
+        geometry = shape(geometry_data).buffer(0)
+        if geometry.is_empty:
+            continue
+        raw_candidate_geometries.append(geometry)
+
     candidate_geometries: dict[int, list[Any]] = {}
     for geometry_data, value in shapes(labels.astype("int32"), mask=labels > 0, transform=transform):
         candidate_geometries.setdefault(int(value), []).append(shape(geometry_data))
 
-    he_signatures = _he_signatures(aim_features)
+    pixel_size_m = max(abs(x_resolution), abs(y_resolution))
+    terrain_channels = {
+        "discovery": discovery,
+        "max_relief": max_relief,
+        "persistence": persistence,
+        "linear": linear_score,
+        "annular": annular,
+        "ridge_valley": ridge_valley,
+        "texture": texture,
+        "coherence": coherence,
+        "terrain_novelty": terrain_novelty,
+    }
+    he_references = _he_reference_bank(aim_features, terrain_channels, transform, pixel_size_m)
+    he_validation = _evaluate_known_features(
+        aim_features, he_references, terrain_channels, transform, raw_candidate_geometries,
+        pixel_size_m, profile.level,
+    )
     provisional: list[TerrainCandidate] = []
     stats = {
         "components_considered": 0,
@@ -920,7 +1233,10 @@ def detect_terrain_anomalies(
         "ring_seeded": 0,
         "linear_seeded": 0,
         "novelty_seeded": 0,
+        "multi_signal_seeded": 0,
+        "known_like_ranked": 0,
     }
+    stats["multi_signal_seeded"] = int(np.count_nonzero(multi_signal))
 
     strongest_scale = np.zeros(shape_out, dtype="float32")
     strongest_relief = np.zeros(shape_out, dtype="float32")
@@ -977,11 +1293,13 @@ def detect_terrain_anomalies(
             ]
             geometries = local_geometries or geometries
 
-        geometry = unary_union(geometries).buffer(0)
-        if detail_union is not None:
-            geometry = geometry.difference(detail_union).buffer(0)
-        if monument_union is not None:
-            geometry = geometry.difference(monument_union).buffer(0)
+        raw_geometry = unary_union(geometries).buffer(0)
+        geometry = raw_geometry
+        if exclude_historic_england:
+            if detail_union is not None:
+                geometry = geometry.difference(detail_union).buffer(0)
+            if monument_union is not None:
+                geometry = geometry.difference(monument_union).buffer(0)
         if geometry.is_empty or float(geometry.area) < profile.min_area_m2:
             continue
         if _near_parallel_known_feature(geometry, aim_features):
@@ -999,6 +1317,7 @@ def detect_terrain_anomalies(
         novelty_local = terrain_novelty[component_slice]
         ridge_local = ridge_valley[component_slice]
         texture_local = texture[component_slice]
+        persistence_local = persistence[component_slice]
 
         discovery_strength = float(np.quantile(discovery_local[score_pixels], 0.82))
         relief_values = np.abs(strongest_relief_local[score_pixels])
@@ -1015,7 +1334,24 @@ def detect_terrain_anomalies(
         shape_score = _morphology_score(morphology, linear_tail)
         modern_penalty = float(np.clip(_raster_tail_mean_values(modern_local, score_pixels), 0.0, 1.0))
         satellite_support = float(np.clip(np.mean(satellite_local[score_pixels]) if np.any(score_pixels) else 0.0, 0.0, 1.0))
-        he_similarity = _he_similarity(morphology, he_signatures)
+        candidate_channels = {
+            "discovery": discovery_local,
+            "max_relief": max_relief_local,
+            "persistence": persistence_local,
+            "linear": linear_local,
+            "annular": annular_local,
+            "ridge_valley": ridge_local,
+            "texture": texture_local,
+            "coherence": coherence[component_slice],
+            "terrain_novelty": novelty_local,
+        }
+        learned_descriptor = _candidate_descriptor(morphology, candidate_channels, score_pixels)
+        learned_he_similarity, he_match_type, he_match_uid = _he_similarity_against_bank(
+            learned_descriptor[6:],
+            he_references,
+            geometry_descriptor=learned_descriptor[:6],
+        )
+        he_similarity = learned_he_similarity
 
         linear_bonus = 0.05 if linear_tail >= 0.65 and morphology["elongation"] >= 7.0 else 0.0
         ring_bonus = 0.07 if annular_tail >= 0.65 and morphology["circularity"] >= 0.42 else 0.0
@@ -1025,7 +1361,7 @@ def detect_terrain_anomalies(
             0.28 * discovery_strength + 0.15 * lidar_strength + 0.12 * persistence_score
             + 0.10 * shape_score + 0.10 * linear_tail + 0.10 * annular_tail
             + 0.07 * ridge_tail + 0.08 * novelty_tail + 0.04 * texture_tail
-            + 0.03 * satellite_support + 0.02 * he_similarity
+            + 0.02 * satellite_support + 0.08 * he_similarity
             + linear_bonus + ring_bonus + novelty_bonus
         )
         final_score = 100.0 * max(0.0, base * context_weight)
@@ -1040,7 +1376,9 @@ def detect_terrain_anomalies(
         if novelty_tail >= 0.58: reasons.append("unusual terrain pattern learned within this AOI")
         if texture_tail >= 0.58: reasons.append("distinctive local terrain texture")
         if satellite_support >= 0.20: reasons.append("satellite vegetation/reflectance anomaly supports the terrain signal")
-        if he_similarity >= 0.75: reasons.append("geometry resembles known Historic England mapped forms")
+        if he_similarity >= 0.68:
+            reasons.append(f"LiDAR terrain signature resembles known Historic England {he_match_type or 'feature'}")
+            stats["known_like_ranked"] += 1
         if modern_penalty >= 0.65:
             reasons.append("strong modern-feature conflict")
             stats["modern_heavily_penalised"] += 1
@@ -1071,6 +1409,8 @@ def detect_terrain_anomalies(
             ring_score=100.0 * annular_tail,
             ridge_valley_score=100.0 * ridge_tail,
             texture_score=100.0 * texture_tail,
+            he_match_type=he_match_type,
+            he_match_uid=he_match_uid,
         ))
 
     provisional.sort(key=lambda item: (item.score, item.terrain_novelty_score, item.linear_score, item.ring_score, item.relief_m), reverse=True)
@@ -1108,15 +1448,17 @@ def detect_terrain_anomalies(
             ring_score=item.ring_score,
             ridge_valley_score=item.ridge_valley_score,
             texture_score=item.texture_score,
+            he_match_type=item.he_match_type,
+            he_match_uid=item.he_match_uid,
         )
         for index, item in enumerate(retained, 1)
     ]
 
     metadata = {
         "name": "hybrid-terrain-pattern-detector",
-        "version": "0.4.2",
+        "version": "0.4.3",
         "sensitivity": profile.level,
-        "sensitivity_description": "1=very conservative, 5=balanced research setting, 10=maximum exploratory recall",
+        "sensitivity_description": "1=very conservative, 5=balanced research setting with HE recall validation, 10=maximum exploratory recall",
         "workers_requested": workers,
         "workers_auto_cap": 6,
         "scales_m": list(reliefs),
@@ -1128,6 +1470,9 @@ def detect_terrain_anomalies(
         "machine_learning": novelty_metadata,
         "threshold_percentile": profile.threshold_percentile,
         "seed_percentile": profile.seed_percentile,
+        "adaptive_broad_seed_percentile": seed_percentile,
+        "multi_signal_channel_percentile": channel_percentile,
+        "multi_signal_channels_required": 2 if profile.level <= 7 else 1,
         "linear_response_percentile": profile.linear_percentile,
         "annular_seed_percentile": profile.annular_percentile,
         "novelty_seed_percentile": profile.novelty_percentile,
@@ -1147,18 +1492,31 @@ def detect_terrain_anomalies(
         "satellite_context": satellite_metadata,
         "diagnostic_rasters": diagnostic_outputs,
         "historic_england_reference": {
-            "detail": "Historic England is contextual evidence and an exclusion mask; candidate generation remains valid with zero HE records.",
+            "detail": "Historic England features are evaluated as known positives before exclusion from the final unknown-candidate set.",
             "detailed_mapping_count": len(aim_features),
             "monument_extents_count": len(monument_extents),
-            "monument_extents_exclusion": bool(monument_extents),
+            "monument_extents_exclusion": bool(monument_extents) and exclude_historic_england,
             "monument_extents_buffer_m": profile.monument_buffer_m,
             "detailed_mapping_exclusion_buffer_m": profile.detailed_buffer_m,
             "candidate_generation_requires_historic_england": False,
+            "candidate_generation_excludes_historic_england": bool(exclude_historic_england),
+            "reference_model": "LiDAR terrain signatures from Historic England geometries in this AOI",
+            "reference_count": len(he_references),
+            "known_validation_total": len(he_validation),
+            "known_validation_candidate_hits": sum(1 for item in he_validation if item["candidate_detected"]),
+            "known_validation_evidence_hits": sum(1 for item in he_validation if item["evidence_detected"]),
+            "known_validation_validated_hits": sum(1 for item in he_validation if item["validated_detection"]),
+            "known_validation_recall_percent": (
+                100.0 * sum(1 for item in he_validation if item["validated_detection"]) / len(he_validation)
+                if he_validation else 0.0
+            ),
         },
+        "historic_england_validation": he_validation,
         "provisional_statistics": stats,
         "warning": (
-            "The detector combines deterministic terrain morphology with unsupervised terrain novelty. "
-            "The ML component learns unusual patterns within this AOI but has no archaeological training labels yet. "
+            "The detector uses deterministic terrain morphology, a per-AOI unsupervised novelty model, "
+            "and a LiDAR terrain-signature reference bank derived from Historic England features. "
+            "The HE reference bank is label-guided within the current AOI, not a general trained archaeological model. "
             "Candidates remain research leads, not confirmed archaeological identifications."
         ),
     }

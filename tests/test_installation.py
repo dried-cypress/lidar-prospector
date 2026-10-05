@@ -18,5 +18,5 @@ def test_module_entry_point_exists() -> None:
 def test_gitignore_covers_environment_files_and_virtualenvs():
     root = Path(__file__).parents[1]
     text = (root / ".gitignore").read_text(encoding="utf-8")
-    for pattern in (".env", ".env.*", "*.env", "env/", ".venv/"):
+    for pattern in (".env", ".env.*", "*.env", "env/", ".venv/", "project/"):
         assert pattern in text

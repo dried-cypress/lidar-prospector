@@ -333,7 +333,7 @@ def test_html_report_has_switchable_local_evidence_bases(tmp_path: Path) -> None
     write_html_report(
         report,
         run_id="switching",
-        application_version="0.3.7",
+        application_version="0.4.3",
         latitude=50.8,
         longitude=-0.2,
         easting=530000,
@@ -352,17 +352,19 @@ def test_html_report_has_switchable_local_evidence_bases(tmp_path: Path) -> None
         map_bounds=(0, 0, 1000, 1000),
         lidar_base_path=lidar_base,
         anomaly_base_path=anomaly_base,
-        satellite_preview_path=satellite,
+        high_resolution_imagery_path=satellite,
     )
     text = report.read_text(encoding="utf-8")
     assert 'data-base-button="lidar"' in text
     assert 'data-base-button="anomalies"' in text
-    assert 'data-base-button="satellite"' in text
+    assert 'data-base-button="imagery"' in text
+    assert 'High-resolution imagery' in text
     assert "layer-map" in text
     assert "data-toggle-overlay=\"he\"" in text
     assert "layer-controls" in text
     assert "position:absolute" not in text[text.index(".layer-controls"):text.index(".layer-controls") + 260]
     assert "Layers &amp; base imagery" in text
+    assert "Sentinel-2" not in text[text.index("data-base-button=\"imagery\""):text.index("data-base-button=\"imagery\"") + 220] if "data-base-button=\"imagery\"" in text else False
 
 
 def test_html_report_has_candidate_navigation_and_theme_controls(tmp_path: Path) -> None:
@@ -406,3 +408,49 @@ def test_html_report_candidate_table_links_to_visible_map_marker(tmp_path: Path)
     assert 'id="map-candidate-1"' in text
     assert 'data-focus-candidate="1"' in text
     assert 'View on map ↗' in text
+
+
+def test_html_report_exposes_he_detection_validation(tmp_path: Path) -> None:
+    report = tmp_path / "report.html"
+    write_html_report(
+        report,
+        run_id="he-validation",
+        application_version="0.4.3",
+        latitude=50.8,
+        longitude=-0.2,
+        easting=530000,
+        northing=105000,
+        diameter_m=1000,
+        aim_features=[],
+        monument_extents=[],
+        project_areas=[],
+        cache_entries=[],
+        errors=[],
+        overlay_path=None,
+        dtm_path=None,
+        hillshade_path=None,
+        aim_geojson_path=None,
+        study_bounds=(0, 0, 100, 100),
+        anomaly_metadata={
+            "sensitivity": 5,
+            "historic_england_reference": {
+                "known_validation_total": 2,
+                "known_validation_validated_hits": 1,
+                "known_validation_recall_percent": 50.0,
+            },
+            "historic_england_validation": [
+                {
+                    "index": 1, "uid": "HE-1", "type": "Round barrow",
+                    "candidate_detected": True, "evidence_detected": True,
+                    "validated_detection": True, "evidence_score": 88.0,
+                    "best_candidate_overlap": 91.0, "similarity_to_other_known": 77.0,
+                    "similarity_match_type": "Round barrow",
+                },
+            ],
+        },
+    )
+    text = report.read_text(encoding="utf-8")
+    assert "Historic England detector validation" in text
+    assert "Validated detections" in text
+    assert "50.0%" in text
+    assert "Round barrow" in text

@@ -20,7 +20,7 @@ CLI
  |      +--> OpenStreetMap supplement
  |
  +--> satellite provider
- |      +--> Sentinel-2 STAC discovery
+ |      +--> Sentinel-2 spectral-context STAC discovery
  |      +--> multi-scene NDVI support
  |
  +--> contextual ranker
@@ -28,7 +28,7 @@ CLI
  |      +--> morphology
  |      +--> modernity penalty
  |      +--> satellite support
- |      +--> HE geometry similarity
+ |      +--> HE LiDAR terrain-signature similarity
  |
  +--> candidates / GeoJSON / HTML
 ```
@@ -53,7 +53,7 @@ V0.3.5 uses a transparent weighted rank:
 20% cross-scale persistence
 18% morphology
 10% satellite spectral support
- 8% Historic England geometry similarity
+ 8% Historic England LiDAR terrain-signature similarity
 
 then apply a modernity penalty
 ```
@@ -64,7 +64,7 @@ The score is deliberately not described as a probability.
 
 Modern features are soft context rather than universal exclusion. Buildings and roads receive the strongest penalty, while paths and boundaries remain softer because ancient features can survive beneath or beside modern infrastructure.
 
-Historic England AIM `Detailed_Mapping` remains the known-archaeology reference and exclusion layer. Monument extents and project areas are preserved as contextual display layers, not treated as individual mapped features. The provider fully paginates all three vector layers before analysis. The absence of an AIM record is **unknown**, not negative training evidence.
+Historic England AIM `Detailed_Mapping` remains the known-archaeology reference. From v0.4.3, detection runs before HE exclusion so known features can be measured as positive validation examples. Monument extents and project areas remain contextual display/exclusion layers. The provider fully paginates all three vector layers before analysis. The absence of an AIM record is **unknown**, not negative training evidence.
 
 ## V2 boundary
 

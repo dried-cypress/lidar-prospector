@@ -14,6 +14,7 @@ from prospector import __version__
 from prospector.config import AppConfig
 from prospector.domain import Coordinate, StudyArea
 from prospector.providers.historic_england import HistoricEnglandProvider
+from prospector.providers.imagery import HighResolutionImageryProvider
 from prospector.providers.http import CachedResponse, HttpClient
 from prospector.providers.lidar import DTM_COVERAGE_ID, WCS_URL, LidarProvider
 from prospector.providers.location import DEFAULT_REVERSE_GEOCODER_URL, LocationProvider
@@ -353,6 +354,8 @@ def analyse(
     satellite_preview_path: Path | None = None
     satellite_search_path: Path | None = None
     satellite_metadata: dict[str, Any] = {"enabled": False}
+    highres_imagery_path: Path | None = None
+    highres_imagery_metadata: dict[str, Any] = {"enabled": False}
 
     if dtm_output is not None and dtm_output.is_file() and not no_context:
         console.print("[bold]Modern feature context — Ordnance Survey[/bold]")
@@ -476,12 +479,32 @@ def analyse(
             if satellite_support_path:
                 console.print(f"[green]  Satellite support raster:[/green] {satellite_support_path}")
             if satellite_preview_path:
-                console.print(f"[green]  Satellite preview:[/green] {satellite_preview_path}")
+                # v0.4.3 no longer uses Sentinel-2 imagery as a visual base layer.
+                satellite_preview_path.unlink(missing_ok=True)
+                satellite_preview_path = None
         except Exception as exc:
             errors.append(f"Satellite context processing failed: {exc}")
             console.print(f"[yellow]  Satellite context failed:[/yellow] {exc}")
     elif not no_satellite and dtm_output is None:
         satellite_metadata = {"enabled": False, "reason": "no DTM"}
+
+    if dtm_output is not None and dtm_output.is_file() and not no_satellite:
+        console.print("[bold]High-resolution imagery — Esri World Imagery[/bold]")
+        try:
+            imagery_result = HighResolutionImageryProvider(client).acquire(
+                _raster_bounds(dtm_output), run_path
+            )
+            highres_imagery_path = imagery_result.preview_path
+            highres_imagery_metadata = imagery_result.metadata
+            context_cache.extend(imagery_result.cache_entries)
+            errors.extend(imagery_result.errors)
+            if highres_imagery_path:
+                console.print(f"[green]  Imagery:[/green] {highres_imagery_path}")
+        except Exception as exc:
+            errors.append(f"High-resolution imagery processing failed: {exc}")
+            console.print(f"[yellow]  High-resolution imagery failed:[/yellow] {exc}")
+    elif not no_satellite and dtm_output is None:
+        highres_imagery_metadata = {"enabled": False, "reason": "no DTM"}
 
     overlay_output: Path | None = None
     anomaly_overlay_output: Path | None = None
@@ -534,6 +557,7 @@ def analyse(
             anomaly_metadata["external_context"] = {
                 **context_metadata,
                 "satellite": satellite_metadata,
+                "high_resolution_imagery": highres_imagery_metadata,
                 "location": location_metadata,
                 "modern_feature_count": len(modern_features),
             }
@@ -549,6 +573,27 @@ def analyse(
                 monument_extents=monument_extents,
                 project_areas=project_areas,
             )
+            he_reference = anomaly_metadata.get("historic_england_reference", {})
+            if he_reference.get("known_validation_total", 0):
+                console.print(
+                    "  HE validation: "
+                    f"{he_reference.get('known_validation_validated_hits', 0)}/"
+                    f"{he_reference.get('known_validation_total', 0)} known features validated "
+                    f"({he_reference.get('known_validation_recall_percent', 0.0):.1f}%)"
+                )
+                validation_output = run_path / "candidates" / "historic-england-detection-validation.geojson"
+                validation_features = []
+                for item in anomaly_metadata.get("historic_england_validation", []):
+                    source_index = int(item.get("source_index", -1))
+                    if not 0 <= source_index < len(aim):
+                        continue
+                    validation_features.append({
+                        "type": "Feature",
+                        "geometry": aim[source_index].get("geometry"),
+                        "properties": item,
+                    })
+                write_feature_collection(validation_features, validation_output)
+                anomaly_metadata["historic_england_validation_geojson"] = str(validation_output)
             console.print(f"  Ranked candidates retained: {len(candidates)}")
             console.print(f"[green]Anomaly overlay generated:[/green] {anomaly_overlay_output}")
             console.print(f"[green]Combined anomaly + AIM overlay generated:[/green] {anomaly_aim_overlay_output}")
@@ -596,7 +641,8 @@ def analyse(
             map_bounds=map_bounds,
             modern_context_path=modern_context_geojson,
             modern_context_raster_path=(run_path / "terrain" / "modern-context-score.tif") if (run_path / "terrain" / "modern-context-score.tif").is_file() else None,
-            satellite_preview_path=satellite_preview_path,
+            satellite_preview_path=None,
+            high_resolution_imagery_path=highres_imagery_path,
             satellite_support_path=satellite_support_path,
             satellite_search_path=satellite_search_path,
             lidar_base_path=lidar_base_output,
@@ -615,8 +661,8 @@ def analyse(
         "lidar_anomalies_base": _relative_output(anomaly_base_output, run_path),
         "modern_context_geojson": _relative_output(modern_context_geojson, run_path),
         "modern_context_raster": _relative_output((run_path / "terrain" / "modern-context-score.tif") if (run_path / "terrain" / "modern-context-score.tif").is_file() else None, run_path),
-        "satellite_preview": _relative_output(satellite_preview_path, run_path),
         "satellite_support": _relative_output(satellite_support_path, run_path),
+        "high_resolution_imagery": _relative_output(highres_imagery_path, run_path),
         "satellite_search": _relative_output(satellite_search_path, run_path),
         "dtm": _relative_output(dtm_output, run_path),
         "hillshade": _relative_output(hillshade_output, run_path),
@@ -624,6 +670,7 @@ def analyse(
         "anomaly_overlay": _relative_output(anomaly_overlay_output, run_path),
         "anomaly_aim_overlay": _relative_output(anomaly_aim_overlay_output, run_path),
         "candidate_geojson": _relative_output(candidate_output, run_path),
+        "historic_england_detection_validation": _relative_output((run_path / "candidates" / "historic-england-detection-validation.geojson") if (run_path / "candidates" / "historic-england-detection-validation.geojson").is_file() else None, run_path),
         "html_report": _relative_output(report_output, run_path) if report_output.is_file() else None,
     }
     checksum_paths = {
@@ -632,8 +679,8 @@ def analyse(
         "historic_england_project_areas_geojson": project_areas_output,
         "modern_context_geojson": modern_context_geojson,
         "modern_context_raster": (run_path / "terrain" / "modern-context-score.tif"),
-        "satellite_preview": satellite_preview_path,
         "satellite_support": satellite_support_path,
+        "high_resolution_imagery": highres_imagery_path,
         "satellite_search": satellite_search_path,
         "dtm": dtm_output,
         "hillshade": hillshade_output,
@@ -655,9 +702,9 @@ def analyse(
                 "status": "completed" if candidate_output is not None else "failed",
             },
             "classifier": {
-                "name": "hybrid-terrain-novelty-ranker",
+                "name": "HE-guided terrain-signature ranker",
                 "version": __version__,
-                "status": "deterministic morphology + unsupervised per-AOI ML novelty",
+                "status": "deterministic morphology + unsupervised per-AOI ML novelty + HE reference signatures",
             },
         },
         sources={

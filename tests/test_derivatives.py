@@ -50,7 +50,7 @@ def test_detect_terrain_anomalies_returns_candidates(tmp_path: Path) -> None:
 
     candidates, metadata = detect_terrain_anomalies(dtm, [])
     assert metadata["name"] == "hybrid-terrain-pattern-detector"
-    assert metadata["version"] == "0.4.2"
+    assert metadata["version"] == "0.4.3"
     assert metadata["sensitivity"] == 5
     assert metadata["machine_learning"]["model"] == "IsolationForest"
     assert candidates
@@ -280,3 +280,72 @@ def test_sensitivity_ten_is_explicitly_exploratory(tmp_path: Path) -> None:
     assert metadata["sensitivity"] == 10
     assert metadata["sensitivity_description"].startswith("1=very conservative")
     assert metadata["max_candidates"] == 735
+
+
+def test_known_he_feature_is_detected_before_exclusion(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_origin
+    from prospector.terrain.anomalies import detect_terrain_anomalies
+
+    yy, xx = np.mgrid[0:180, 0:180]
+    radius = np.hypot(xx - 90, yy - 90)
+    ring = 3.2 * np.exp(-((radius - 30.0) ** 2) / (2.0 * 2.2**2))
+    data = ring.astype("float32")
+    dtm = tmp_path / "known-ring.tif"
+    with rasterio.open(
+        dtm, "w", driver="GTiff", width=180, height=180, count=1,
+        dtype="float32", crs="EPSG:27700", transform=from_origin(620000, 620180, 1, 1), nodata=-9999,
+    ) as destination:
+        destination.write(data, 1)
+
+    known = {
+        "type": "Feature",
+        "geometry": {"type": "Polygon", "coordinates": [[[620055, 620180], [620125, 620180], [620125, 620110], [620055, 620110], [620055, 620180]]]},
+        "properties": {"HE_UID": "BARROW-1", "MONUMENT_TYPE": "Round barrow", "LAYER": "Bank"},
+    }
+    candidates_all, metadata_all = detect_terrain_anomalies(
+        dtm, [known], sensitivity=5, workers=1, exclude_historic_england=False
+    )
+    known_geometry = __import__("shapely.geometry", fromlist=["shape"]).shape(known["geometry"])
+    assert any(candidate.geometry.intersects(known_geometry) for candidate in candidates_all)
+    assert metadata_all["historic_england_reference"]["candidate_generation_excludes_historic_england"] is False
+
+    candidates, metadata = detect_terrain_anomalies(dtm, [known], sensitivity=5, workers=1)
+    validation = metadata["historic_england_validation"]
+    assert len(validation) == 1
+    assert validation[0]["uid"] == "BARROW-1"
+    assert validation[0]["candidate_detected"] is True
+    assert metadata["historic_england_reference"]["known_validation_total"] == 1
+    # The registered feature is removed only after the raw detector has evaluated it.
+    assert all(not candidate.geometry.intersects(__import__("shapely.geometry", fromlist=["shape"]).shape(known["geometry"])) for candidate in candidates)
+
+
+def test_candidate_receives_lidar_signature_match_to_known_he_feature(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_origin
+    from prospector.terrain.anomalies import detect_terrain_anomalies
+
+    yy, xx = np.mgrid[0:260, 0:260]
+    r1 = np.hypot(xx - 75, yy - 130)
+    r2 = np.hypot(xx - 185, yy - 130)
+    ring1 = 3.0 * np.exp(-((r1 - 24.0) ** 2) / (2.0 * 2.2**2))
+    ring2 = 3.0 * np.exp(-((r2 - 24.0) ** 2) / (2.0 * 2.2**2))
+    data = (ring1 + ring2).astype("float32")
+    dtm = tmp_path / "known-and-unknown-rings.tif"
+    with rasterio.open(
+        dtm, "w", driver="GTiff", width=260, height=260, count=1,
+        dtype="float32", crs="EPSG:27700", transform=from_origin(630000, 630260, 1, 1), nodata=-9999,
+    ) as destination:
+        destination.write(data, 1)
+
+    known = {
+        "type": "Feature",
+        "geometry": {"type": "Polygon", "coordinates": [[[630050, 630160], [630100, 630160], [630100, 630110], [630050, 630110], [630050, 630160]]]},
+        "properties": {"HE_UID": "KNOWN-1", "MONUMENT_TYPE": "Round barrow", "LAYER": "Bank"},
+    }
+    candidates, metadata = detect_terrain_anomalies(dtm, [known], sensitivity=5, workers=1)
+    assert candidates
+    learned = max(candidates, key=lambda candidate: candidate.he_similarity)
+    assert learned.he_similarity > 50.0
+    assert learned.he_match_type
+    assert metadata["historic_england_reference"]["reference_count"] == 1

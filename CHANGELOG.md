@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.3 — HE-guided detector validation
+
+- Generate terrain candidates before Historic England exclusion so known monuments can be used as measurable detector ground truth.
+- Add LiDAR terrain-signature reference matching using known Historic England geometries and multi-channel terrain descriptors.
+- Add a multi-signal recall-oriented candidate seeding stage so sensitivity 5 can recover subtle features supported by several moderate terrain channels.
+- Add per-run Historic England validation metrics and `historic-england-detection-validation.geojson`.
+- Remove matched Historic England features only after detection/validation, while retaining the existing anomaly and combined visual overlays for inspection.
+- Record the nearest known feature type/UID that a candidate resembles.
+- Replace the Sentinel-2 visual base layer with high-resolution Esri World Imagery; retain Sentinel-2 only for optional spectral detector context.
+- Preserve the v0.4.2 installation, Python 3.10 compatibility, OS Data Hub documentation and protected `project/` Git ignore.
+
 ## 0.4.2 — Sentinel preview and OS API documentation
 
 - Fix Sentinel-2 masked `uint16` raster handling by converting masked source arrays to floating point before applying NaN nodata values.

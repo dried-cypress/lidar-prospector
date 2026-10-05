@@ -473,6 +473,7 @@ def write_html_report(
     modern_context_path: Path | None = None,
     modern_context_raster_path: Path | None = None,
     satellite_preview_path: Path | None = None,
+    high_resolution_imagery_path: Path | None = None,
     satellite_support_path: Path | None = None,
     satellite_search_path: Path | None = None,
     lidar_base_path: Path | None = None,
@@ -481,7 +482,7 @@ def write_html_report(
     location_display_name: str | None = None,
     location_attribution: str | None = None,
 ) -> Path:
-    'Write the V0.4.2 report with first-class maps, layered evidence and detector provenance.'
+    'Write the V0.4.3 report with first-class maps, layered evidence and detector provenance.'
     destination.parent.mkdir(parents=True, exist_ok=True)
     candidates = candidates or []
     monument_extents = monument_extents or []
@@ -537,12 +538,12 @@ def write_html_report(
             f'</div>'
         )
 
-    satellite_html = '<p class="empty">No satellite context image was generated for this run.</p>'
-    if satellite_preview_path is not None and satellite_preview_path.is_file():
-        satellite_data, satellite_width, satellite_height = _image_data(satellite_preview_path)
+    satellite_html = '<p class="empty">No high-resolution visual imagery was generated for this run.</p>'
+    if high_resolution_imagery_path is not None and high_resolution_imagery_path.is_file():
+        imagery_data, imagery_width, imagery_height = _image_data(high_resolution_imagery_path)
         satellite_html = (
-            f'<div class="map-image" style="aspect-ratio:{satellite_width}/{satellite_height}">'
-            f'<img src="{satellite_data}" alt="Latest Sentinel-2 satellite context">'
+            f'<div class="map-image" style="aspect-ratio:{imagery_width}/{imagery_height}">'
+            f'<img src="{imagery_data}" alt="High-resolution aerial and satellite imagery">'
             f'</div>'
         )
 
@@ -566,7 +567,7 @@ def write_html_report(
         f'<td>{c.ridge_valley_score:.1f}</td><td>{c.terrain_novelty_score:.1f}</td><td>{c.texture_score:.1f}</td>'
         f'<td>{c.modern_penalty:.1f}</td><td>{c.satellite_support:.1f}</td><td>{c.he_similarity:.1f}</td>'
         f'<td>{c.relief_m:.2f} m</td><td>{c.strongest_scale_m:g} m</td><td>{c.area_m2:,.1f} m²</td>'
-        f'<td>{_escape("; ".join(c.reasons) or "—")}</td></tr>'
+        f'<td>{_escape(c.he_match_type or "—")}</td><td>{_escape(c.he_match_uid or "—")}</td><td>{_escape("; ".join(c.reasons) or "—")}</td></tr>'
         for i, c in enumerate(candidates, 1)
     )
     metadata_json = _escape(json.dumps(anomaly_metadata or {}, indent=2, default=str, sort_keys=True))
@@ -586,6 +587,28 @@ def write_html_report(
         for label, path in diagnostic_rasters.items()
         if path
     )
+    he_reference = (anomaly_metadata or {}).get("historic_england_reference", {}) or {}
+    he_validation = (anomaly_metadata or {}).get("historic_england_validation", []) or []
+    he_validation_html = ""
+    if he_validation:
+        he_rows = "".join(
+            f'<tr><td>{_escape(item.get("index", "—"))}</td><td>{_escape(item.get("type", "—"))}</td>'
+            f'<td>{_escape(item.get("uid", "—"))}</td><td>{"YES" if item.get("candidate_detected") else "NO"}</td>'
+            f'<td>{"YES" if item.get("evidence_detected") else "NO"}</td><td>{"YES" if item.get("validated_detection") else "NO"}</td>'
+            f'<td>{float(item.get("evidence_score", 0.0)):.1f}</td><td>{float(item.get("best_candidate_overlap", 0.0)):.1f}%</td>'
+            f'<td>{float(item.get("similarity_to_other_known", 0.0)):.1f}%</td><td>{_escape(item.get("similarity_match_type", "—"))}</td></tr>'
+            for item in he_validation
+        )
+        he_validation_html = (
+            '<section><h2>Historic England detector validation</h2>'
+            '<p class="note">The detector is deliberately tested against known Historic England archaeology before those features are removed from the final discovery candidate set. This measures recall rather than hiding known features before detection.</p>'
+            f'<div class="metric-row"><div class="metric"><small>Known HE features</small><strong>{len(he_validation)}</strong></div>'
+            f'<div class="metric"><small>Validated detections</small><strong>{he_reference.get("known_validation_validated_hits", 0)}</strong></div>'
+            f'<div class="metric"><small>Recall</small><strong>{float(he_reference.get("known_validation_recall_percent", 0.0)):.1f}%</strong></div></div>'
+            '<table><thead><tr><th>#</th><th>Type</th><th>UID</th><th>Candidate hit</th><th>Terrain evidence</th><th>Validated</th><th>Evidence</th><th>Overlap</th><th>Similarity</th><th>Matched type</th></tr></thead>'
+            f'<tbody>{he_rows}</tbody></table></section>'
+        )
+
     diagnostic_html = (
         f'<details class="diagnostic-details"><summary>Open detector diagnostic layers</summary>'
         f'<p class="note">These rasters expose the individual discovery channels used to rank candidates. They are particularly useful when comparing sensitivity levels and investigating subtle features.</p>'
@@ -610,7 +633,7 @@ def write_html_report(
             bases=[
                 ("lidar", "LiDAR hillshade", lidar_base_path),
                 ("anomalies", "LiDAR anomaly relief", anomaly_base_path),
-                ("satellite", "Sentinel-2", satellite_preview_path),
+                ("imagery", "High-resolution imagery", high_resolution_imagery_path),
             ],
             he_svg=he_svg,
             candidate_svg=candidate_svg,
@@ -799,22 +822,22 @@ a {{ color:var(--accent); }}
 
 <section><h2>Interactive evidence map</h2><p class="note">Switch base imagery while keeping the Historic England and Prospector anomaly overlays aligned to the same map grid.</p>{interactive_map_html}</section>
 
-<section id="anomaly-section"><h2>Terrain anomaly scan</h2><p class="note">Hybrid discovery combines multi-scale local relief, persistence, linear/Hough structure, ring/annular response, ridge/valley morphology, local texture/coherence and unsupervised terrain novelty. Historic England remains contextual evidence and an exclusion mask.</p><div class="metric-row"><div class="metric"><small>Sensitivity</small><strong>{_escape(sensitivity_name)}</strong></div><div class="metric"><small>Detector</small><strong>Hybrid + unsupervised ML</strong></div><div class="metric"><small>Detector workers</small><strong>{_escape(detector_workers_label)}</strong></div><div class="metric"><small>Retained candidates</small><strong>{len(candidates)}</strong></div><div class="metric"><small>HE detailed features</small><strong>{len(aim_features)}</strong></div></div>{anomaly_map_html}<table><thead><tr><th>#</th><th>Map</th><th>Class</th><th>Final</th><th>LiDAR</th><th>Persistence</th><th>Morphology</th><th>Linear</th><th>Ring</th><th>Ridge/valley</th><th>Novelty</th><th>Texture</th><th>Modern</th><th>Satellite</th><th>HE similarity</th><th>Relief</th><th>Scale</th><th>Area</th><th>Why retained</th></tr></thead><tbody>{candidate_rows}</tbody></table>{diagnostic_html}<details><summary>Detector parameters and provenance</summary><pre>{metadata_json}</pre></details></section>
+<section id="anomaly-section"><h2>Terrain anomaly scan</h2><p class="note">Hybrid discovery combines multi-scale local relief, persistence, linear/Hough structure, ring/annular response, ridge/valley morphology, local texture/coherence, unsupervised terrain novelty and a LiDAR terrain-signature reference bank learned from known Historic England features. Known features are detected first for recall validation, then removed from the final unknown-candidate set.</p><div class="metric-row"><div class="metric"><small>Sensitivity</small><strong>{_escape(sensitivity_name)}</strong></div><div class="metric"><small>Detector</small><strong>Hybrid + unsupervised ML</strong></div><div class="metric"><small>Detector workers</small><strong>{_escape(detector_workers_label)}</strong></div><div class="metric"><small>Retained candidates</small><strong>{len(candidates)}</strong></div><div class="metric"><small>HE detailed features</small><strong>{len(aim_features)}</strong></div></div>{anomaly_map_html}<table><thead><tr><th>#</th><th>Map</th><th>Class</th><th>Final</th><th>LiDAR</th><th>Persistence</th><th>Morphology</th><th>Linear</th><th>Ring</th><th>Ridge/valley</th><th>Novelty</th><th>Texture</th><th>Modern</th><th>Satellite</th><th>HE similarity</th><th>Relief</th><th>Scale</th><th>Area</th><th>HE match type</th><th>HE match UID</th><th>Why retained</th></tr></thead><tbody>{candidate_rows}</tbody></table>{diagnostic_html}<details><summary>Detector parameters and provenance</summary><pre>{metadata_json}</pre></details></section>
 
 <section><h2>Modern feature context</h2><p class="note">Modern mapping is a penalty/context source, not the discovery engine. Roads and buildings are strongly down-ranked; boundaries and tracks are treated more softly.</p><p>Combined modern-context GeoJSON: {_relative_link(destination, modern_context_path)}</p><p>Modernity score raster: {_relative_link(destination, modern_context_raster_path)}</p></section>
 
-<section><h2>Satellite context</h2><p class="note">Sentinel-2 is an optional visual base layer and contextual evidence. It can support a terrain signal through vegetation/reflectance differences but does not define an archaeological candidate.</p>{satellite_html}<table><tr><th>Selected scenes</th><td>{_escape(satellite_meta.get("scene_count", 0))}</td></tr><tr><th>Support raster</th><td>{_relative_link(destination, satellite_support_path)}</td></tr><tr><th>STAC search record</th><td>{_relative_link(destination, satellite_search_path)}</td></tr></table></section>
+{he_validation_html}<section><h2>Satellite / aerial context</h2><p class="note">The visual base layer uses high-resolution Esri World Imagery. Sentinel-2 remains available only as optional spectral context for detector scoring; it is not shown as a visual base.</p>{satellite_html}<table><tr><th>Visual imagery</th><td>{_relative_link(destination, high_resolution_imagery_path)}</td></tr><tr><th>Sentinel-2 selected scenes</th><td>{_escape(satellite_meta.get("scene_count", 0))}</td></tr><tr><th>Sentinel-2 support raster</th><td>{_relative_link(destination, satellite_support_path)}</td></tr><tr><th>Sentinel-2 STAC search</th><td>{_relative_link(destination, satellite_search_path)}</td></tr></table></section>
 
 <section><h2>Combined terrain anomalies + Historic England mapping</h2><p class="note">Review image with anomaly labels and Historic England context rendered on the same LiDAR grid.</p>{combined_map_html}</section>
 
 <section><h2>Historic England Aerial Archaeology Mapping records</h2><p>{len(project_areas)} project area(s), {len(monument_extents)} monument extent(s), and {len(aim_features)} detailed mapped feature geometries.</p><p class="note">Monument extents represent the general recorded monument envelope; detailed mapping represents mapped individual features.</p><table><tr><th>#</th><th>Historic England record</th><th>Type</th><th>Period</th><th>Evidence</th><th>Primary source</th><th>Features</th><th>Details</th></tr>{_aim_record_rows(aim_features)}</table></section>
 
-<section><h2>Run artefacts</h2><p>DTM: {_relative_link(destination, dtm_path)}</p><p>Hillshade: {_relative_link(destination, hillshade_path)}</p><p>AIM GeoJSON: {_relative_link(destination, aim_geojson_path)}</p><p>Candidate GeoJSON: {_relative_link(destination, candidate_geojson_path)}</p><p>LiDAR base: {_relative_link(destination, lidar_base_path)}</p><p>LiDAR anomaly base: {_relative_link(destination, anomaly_base_path)}</p><p>Sentinel-2 base: {_relative_link(destination, satellite_preview_path)}</p><p>AIM visualisation: {_relative_link(destination, overlay_path)}</p><p>Anomaly visualisation: {_relative_link(destination, anomaly_overlay_path)}</p><p>Combined visualisation: {_relative_link(destination, anomaly_aim_overlay_path)}</p></section>
+<section><h2>Run artefacts</h2><p>DTM: {_relative_link(destination, dtm_path)}</p><p>Hillshade: {_relative_link(destination, hillshade_path)}</p><p>AIM GeoJSON: {_relative_link(destination, aim_geojson_path)}</p><p>Candidate GeoJSON: {_relative_link(destination, candidate_geojson_path)}</p><p>LiDAR base: {_relative_link(destination, lidar_base_path)}</p><p>LiDAR anomaly base: {_relative_link(destination, anomaly_base_path)}</p><p>High-resolution imagery base: {_relative_link(destination, high_resolution_imagery_path)}</p><p>AIM visualisation: {_relative_link(destination, overlay_path)}</p><p>Anomaly visualisation: {_relative_link(destination, anomaly_overlay_path)}</p><p>Combined visualisation: {_relative_link(destination, anomaly_aim_overlay_path)}</p></section>
 
 <section><h2>Provenance</h2><p>{cache_hits} cache hit(s), {downloads} download(s).</p><table><tr><th>Status</th><th>URL</th><th>SHA-256</th><th>Bytes</th></tr>{''.join(f'<tr><td>{_escape("HIT" if e.get("cache_hit") else "DOWNLOAD")}</td><td>{_escape(e.get("url", ""))}</td><td><code>{_escape(e.get("sha256", ""))}</code></td><td>{_escape(e.get("size_bytes", ""))}</td></tr>' for e in cache_entries)}</table></section>
 <section><h2>Acquisition status</h2>{error_html}</section>
 <section><h2>Location attribution</h2><p>{_escape(location_attribution or "No reverse-geocoder attribution supplied.")}</p></section>
-{layer_script}<footer>Prospector {_escape(application_version)}. LiDAR elevation supplied by the Environment Agency component used by the NLS Maps 50cm–1m composite; archaeology from Historic England Aerial Investigation and Mapping; modern context from Ordnance Survey/OpenStreetMap; satellite context from Sentinel-2 via Microsoft Planetary Computer.</footer>
+{layer_script}<footer>Prospector {_escape(application_version)}. LiDAR elevation supplied by the Environment Agency component used by the NLS Maps 50cm–1m composite; archaeology from Historic England Aerial Investigation and Mapping; modern context from Ordnance Survey/OpenStreetMap; visual imagery from Esri World Imagery; optional spectral context from Sentinel-2 via Microsoft Planetary Computer.</footer>
 </main></body></html>"""
     destination.write_text(document, encoding="utf-8")
     return destination

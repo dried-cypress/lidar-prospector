@@ -469,20 +469,6 @@ class SatelliteProvider:
                 dtm_path,
             )
 
-            preview_scene = successful_scenes[0]
-            try:
-                preview_path = self._preview_rgb(
-                    preview_scene,
-                    bbox_bng,
-                    target_shape,
-                    target_transform,
-                    run_dir / "overlays" / "satellite-latest.png",
-                )
-                if preview_path is None:
-                    errors.append("Sentinel-2 preview could not be generated from the selected scene")
-            except Exception as exc:
-                errors.append(f"Sentinel-2 preview generation failed: {exc}")
-
             metadata.update(
                 {
                     "scene_count": len(scenes),
@@ -497,8 +483,8 @@ class SatelliteProvider:
                         for item in scenes
                     ],
                     "support_description": "Median multi-scene local NDVI anomaly, used as contextual evidence rather than an archaeological classifier.",
-                    "preview_description": "Optional RGB Sentinel-2 visual asset aligned to the study DTM for visual inspection.",
-                    "preview_asset": "visual",
+                    "preview_description": "Sentinel-2 visual preview intentionally disabled in v0.4.3; high-resolution Esri World Imagery is the visual base layer.",
+                    "preview_asset": None,
                 }
             )
         except Exception as exc:

@@ -317,65 +317,37 @@ def test_satellite_read_window_converts_masked_uint16_before_filling(monkeypatch
     assert data[1, 1] == 400.0
 
 
-def test_satellite_visual_preview_uses_single_signed_asset(monkeypatch, tmp_path: Path) -> None:
-    import warnings
-    from rasterio.errors import NotGeoreferencedWarning
-    from rasterio.transform import from_origin
+def test_satellite_acquisition_does_not_request_visual_preview(monkeypatch, tmp_path: Path) -> None:
     from prospector.providers.satellite import SatelliteProvider
 
     provider = SatelliteProvider(None)  # type: ignore[arg-type]
-    calls = []
+    monkeypatch.setattr(provider, "_search", lambda _bbox: ([], None))
+    result = provider.acquire((0, 0, 10, 10), tmp_path / "unused-dtm.tif", tmp_path / "run")
+    assert result.preview_path is None
 
-    def fake_signed(href: str) -> str:
-        calls.append(href)
-        return href
 
-    monkeypatch.setattr(provider, "_signed_href", fake_signed)
+def test_high_resolution_world_imagery_requests_aligned_png(tmp_path: Path) -> None:
+    from prospector.providers.http import CachedResponse
+    from prospector.providers.imagery import HighResolutionImageryProvider, WORLD_IMAGERY_EXPORT_URL
 
-    class FakeDataset:
-        count = 3
-        crs = "EPSG:27700"
-        transform = from_origin(0, 10, 1, 1)
+    class FakeClient:
+        def cached_bytes(self, key, url, params, *, suffix, validator):
+            assert key == "world-imagery-export"
+            assert url == WORLD_IMAGERY_EXPORT_URL
+            assert params["bboxSR"] == "27700"
+            assert params["imageSR"] == "27700"
+            assert params["format"] == "png32"
+            cache = tmp_path / "image.png"
+            import base64
+            cache.write_bytes(base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/6VZ2AAAAAElFTkSuQmCC"
+            ))
+            return CachedResponse(cache, False, "0" * 64)
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def read(self, indexes, window, boundless, masked):
-            assert indexes == [1, 2, 3]
-            import numpy as np
-            from numpy.ma import masked_array
-            return masked_array(np.ones((3, 10, 10), dtype="uint8"))
-
-        def window_transform(self, window):
-            return self.transform
-
-    class FakeRasterio:
-        pass
-
-    # Exercise the method directly by replacing rasterio.open/Env in the module
-    # import namespace used at runtime.
-    import rasterio
-    monkeypatch.setattr(rasterio, "open", lambda *_a, **_k: FakeDataset())
-    monkeypatch.setattr(rasterio, "Env", lambda **_kwargs: __import__("contextlib").nullcontext())
-
-    def fake_reproject(data, *_args, **_kwargs):
-        return data
-
-    monkeypatch.setattr(provider, "_reproject", staticmethod(fake_reproject))
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", NotGeoreferencedWarning)
-        output = provider._preview_rgb(
-            {"assets": {"visual": {"href": "visual.tif"}}},
-            (0, 0, 5, 5),
-            (10, 10),
-            from_origin(0, 10, 1, 1),
-            tmp_path / "preview.png",
-        )
-    assert output is not None
-    assert calls == ["visual.tif"]
-    assert output.read_bytes().startswith(b"\x89PNG")
-
+    result = HighResolutionImageryProvider(FakeClient()).acquire((500000, 100000, 501000, 101000), tmp_path / "run")
+    assert result.preview_path is not None
+    assert result.preview_path.is_file()
+    assert result.metadata["enabled"] is True
+    assert result.metadata["output_width_px"] == 2048
+    assert result.metadata["output_height_px"] == 2048
+    assert result.metadata["requested_resolution_x_m_per_px"] < 0.5

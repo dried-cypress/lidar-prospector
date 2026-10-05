@@ -140,7 +140,8 @@ def test_lidar_anomaly_overlay_without_he_context_renders(tmp_path: Path) -> Non
     )
     create_lidar_anomaly_overlay(dtm, [candidate], output)
     assert output.is_file()
-    assert Image.open(output).size == (1800, 1350)
+    with Image.open(output) as image:
+        assert image.size == (1800, 1350)
 
 
 def test_combined_overlay_accepts_all_historic_england_layers(tmp_path: Path) -> None:
@@ -259,7 +260,8 @@ def test_lidar_base_overlay_is_rendered_for_report_layer_switching(tmp_path: Pat
     output = tmp_path / "lidar-base.png"
     _write_test_raster(dtm)
     create_lidar_base_overlay(dtm, output)
-    assert Image.open(output).size == (1800, 1350)
+    with Image.open(output) as image:
+        assert image.size == (1800, 1350)
 
 
 def test_lidar_aim_png_repairs_invalid_he_geometry_instead_of_dropping_it(tmp_path: Path) -> None:

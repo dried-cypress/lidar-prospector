@@ -54,6 +54,13 @@ V0.3.5 begins with the V0.2.1 multi-scale Local Relief Model detector but adds:
 - morphology metrics
 - modern-feature contextual penalty
 - multi-scene satellite spectral support
-- geometry similarity to known Historic England features
+- LiDAR terrain-signature similarity to known Historic England features
 
 The result is a deterministic contextual ranker. Candidates remain research leads, not archaeological identifications.
+
+
+## High-resolution visual imagery
+
+Prospector downloads an AOI-aligned visual image from Esri World Imagery using the ArcGIS World Imagery map service export endpoint. World Imagery is a compilation of satellite and aerial imagery; available resolution varies by source and location, with high-resolution sources used in many areas.
+
+The visual image is presentation/context data only. It is not used as the primary archaeology detector input; the detector works from the numeric LiDAR DTM. The report records Esri attribution alongside the imagery.
