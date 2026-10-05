@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.4 — georeferenced imagery and HE-trained detection
+
+- Fix high-resolution World Imagery geographic alignment by explicitly disabling ArcGIS bbox aspect-ratio adjustment and snapping the returned RGB raster to the exact LiDAR transform, CRS, width and height.
+- Keep the existing LiDAR visualisation and Historic England overlays unchanged; high-resolution imagery is an independent base layer on the same map grid.
+- Replace the weak nearby-POI location preference with progressive landscape-scale reverse-geocoding so named hills/historic landscapes outrank pubs, shops and other businesses.
+- Preserve every location lookup cache entry in run provenance.
+- Add an HE-trained Random Forest terrain-likelihood channel to candidate generation and ranking, while retaining unsupervised terrain novelty and the transparent morphology channels.
+- Evaluate known Historic England features before exclusion and expose detector recall/validation separately from final unknown discoveries.
+- Add an `archaeology-likelihood.tif` diagnostic layer and HE terrain-likelihood values to the candidate report.
+- Preserve the project virtual-environment installer and the `project/` Git ignore rule.
+
 ## 0.4.3 — HE-guided detector validation
 
 - Generate terrain candidates before Historic England exclusion so known monuments can be used as measurable detector ground truth.

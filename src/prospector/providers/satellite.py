@@ -483,7 +483,7 @@ class SatelliteProvider:
                         for item in scenes
                     ],
                     "support_description": "Median multi-scene local NDVI anomaly, used as contextual evidence rather than an archaeological classifier.",
-                    "preview_description": "Sentinel-2 visual preview intentionally disabled in v0.4.3; high-resolution Esri World Imagery is the visual base layer.",
+                    "preview_description": "Sentinel-2 visual preview intentionally disabled in v0.4.4; high-resolution Esri World Imagery is the visual base layer.",
                     "preview_asset": None,
                 }
             )

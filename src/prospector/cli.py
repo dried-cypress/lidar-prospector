@@ -235,7 +235,9 @@ def analyse(
         location_display_name = location_result.display_name
         location_attribution = (location_result.metadata or {}).get("attribution")
         location_metadata = {"enabled": True, **location_result.metadata}
-        if location_result.cache_entry is not None:
+        if location_result.cache_entries:
+            location_cache.extend(location_result.cache_entries)
+        elif location_result.cache_entry is not None:
             location_cache.append(location_result.cache_entry)
         if location_result.error:
             errors.append(f"Location lookup failed: {location_result.error}")
@@ -479,7 +481,7 @@ def analyse(
             if satellite_support_path:
                 console.print(f"[green]  Satellite support raster:[/green] {satellite_support_path}")
             if satellite_preview_path:
-                # v0.4.3 no longer uses Sentinel-2 imagery as a visual base layer.
+                # v0.4.4 keeps Sentinel-2 out of the visual map; high-resolution World Imagery is the visual base layer.
                 satellite_preview_path.unlink(missing_ok=True)
                 satellite_preview_path = None
         except Exception as exc:
@@ -492,7 +494,7 @@ def analyse(
         console.print("[bold]High-resolution imagery — Esri World Imagery[/bold]")
         try:
             imagery_result = HighResolutionImageryProvider(client).acquire(
-                _raster_bounds(dtm_output), run_path
+                _raster_bounds(dtm_output), run_path, reference_raster=dtm_output
             )
             highres_imagery_path = imagery_result.preview_path
             highres_imagery_metadata = imagery_result.metadata

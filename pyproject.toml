@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prospector"
-version = "0.4.3"
+version = "0.4.4"
 description = "Reproducible archaeological landscape prospection from LiDAR and contextual evidence."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -53,3 +53,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_default_fixture_loop_scope = "function"

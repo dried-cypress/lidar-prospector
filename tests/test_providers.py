@@ -258,21 +258,52 @@ def test_location_provider_selects_english_name_and_caches_result(tmp_path: Path
 
     class FakeClient:
         def cached_json(self, key, url, params, *, validator=None, headers=None):
-            assert key == "reverse-geocode"
+            assert key in {
+                "reverse-geocode",
+                "reverse-geocode-landscape-16",
+                "reverse-geocode-landscape-14",
+            }
             assert params["format"] == "jsonv2"
             assert headers["Accept"] == "application/json"
             payload = {
                 "display_name": "Thundersbarrow, West Sussex, England, United Kingdom",
                 "namedetails": {"name:en": "Thundersbarrow Hill", "name": "Thundersbarrow"},
-                "address": {"village": "Pyecombe"},
+                "address": {"village": "Pyecombe", "hill": "Thundersbarrow Hill"},
+                "type": "natural",
             }
-            return payload, CachedResponse(tmp_path / "location.json", True, "0" * 64)
+            return payload, CachedResponse(tmp_path / f"location-{params['zoom']}.json", True, "0" * 64)
 
     result = LocationProvider(FakeClient()).reverse(50.8620, -0.2547)
     assert result.name == "Thundersbarrow Hill"
     assert result.display_name == "Thundersbarrow, West Sussex, England, United Kingdom"
     assert result.error is None
     assert result.metadata["attribution"] == "© OpenStreetMap contributors"
+
+
+def test_location_provider_progressively_finds_landscape_name(tmp_path: Path) -> None:
+    from prospector.providers.http import CachedResponse
+    from prospector.providers.location import LocationProvider
+
+    calls = []
+
+    class FakeClient:
+        def cached_json(self, key, url, params, *, validator=None, headers=None):
+            calls.append((key, params["zoom"]))
+            zoom = params["zoom"]
+            if zoom == 18:
+                payload = {"type": "pub", "display_name": "Crooked Moon", "namedetails": {"name": "Crooked Moon"}, "address": {"village": "Mile Oak"}}
+            elif zoom == 16:
+                payload = {"type": "village", "display_name": "Mile Oak", "namedetails": {"name": "Mile Oak"}, "address": {"village": "Mile Oak"}}
+            elif zoom == 14:
+                payload = {"type": "natural", "display_name": "Thundersbarrow Hill, West Sussex", "namedetails": {"name:en": "Thundersbarrow Hill"}, "address": {"hill": "Thundersbarrow Hill"}}
+            else:
+                raise AssertionError(f"unexpected zoom {zoom}")
+            return payload, CachedResponse(tmp_path / f"location-{zoom}.json", True, "0" * 64)
+
+    result = LocationProvider(FakeClient()).reverse(50.8620, -0.2547)
+    assert result.name == "Thundersbarrow Hill"
+    assert result.metadata["landscape_fallback_used"] is True
+    assert [zoom for _key, zoom in calls] == [18, 16, 14]
 
 
 def test_satellite_read_window_converts_masked_uint16_before_filling(monkeypatch):
@@ -326,28 +357,50 @@ def test_satellite_acquisition_does_not_request_visual_preview(monkeypatch, tmp_
     assert result.preview_path is None
 
 
-def test_high_resolution_world_imagery_requests_aligned_png(tmp_path: Path) -> None:
+def test_high_resolution_world_imagery_is_snapped_to_dtm_grid(tmp_path: Path) -> None:
+    import rasterio
+    from PIL import Image
+    from rasterio.transform import from_origin
+
     from prospector.providers.http import CachedResponse
     from prospector.providers.imagery import HighResolutionImageryProvider, WORLD_IMAGERY_EXPORT_URL
 
     class FakeClient:
         def cached_bytes(self, key, url, params, *, suffix, validator):
-            assert key == "world-imagery-export"
+            assert key == "world-imagery-export-v044"
             assert url == WORLD_IMAGERY_EXPORT_URL
             assert params["bboxSR"] == "27700"
             assert params["imageSR"] == "27700"
             assert params["format"] == "png32"
+            assert params["adjustAspectRatio"] == "false"
             cache = tmp_path / "image.png"
-            import base64
-            cache.write_bytes(base64.b64decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/6VZ2AAAAAElFTkSuQmCC"
-            ))
+            from PIL import Image
+            Image.new("RGB", (4, 4), (120, 160, 80)).save(cache, format="PNG")
             return CachedResponse(cache, False, "0" * 64)
 
-    result = HighResolutionImageryProvider(FakeClient()).acquire((500000, 100000, 501000, 101000), tmp_path / "run")
-    assert result.preview_path is not None
-    assert result.preview_path.is_file()
+    dtm = tmp_path / "dtm.tif"
+    transform = from_origin(500000, 100080, 10, 10)
+    with rasterio.open(
+        dtm, "w", driver="GTiff", width=100, height=80, count=1, dtype="float32",
+        crs="EPSG:27700", transform=transform, nodata=-9999,
+    ) as destination:
+        destination.write(__import__("numpy").zeros((80, 100), dtype="float32"), 1)
+
+    result = HighResolutionImageryProvider(FakeClient()).acquire(
+        (500000, 100000, 501000, 100800),
+        tmp_path / "run",
+        reference_raster=dtm,
+    )
+    assert result.preview_path is not None and result.preview_path.is_file()
     assert result.metadata["enabled"] is True
-    assert result.metadata["output_width_px"] == 2048
-    assert result.metadata["output_height_px"] == 2048
-    assert result.metadata["requested_resolution_x_m_per_px"] < 0.5
+    assert result.metadata["alignment"] == "exact LiDAR raster grid"
+    aligned_path = Path(result.metadata["aligned_raster"])
+    with rasterio.open(aligned_path) as aligned, rasterio.open(dtm) as reference:
+        assert aligned.width == reference.width
+        assert aligned.height == reference.height
+        assert aligned.crs == reference.crs
+        assert aligned.transform == reference.transform
+        assert aligned.count == 3
+    with Image.open(result.preview_path) as image:
+        assert image.size == (1800, 1350)
+

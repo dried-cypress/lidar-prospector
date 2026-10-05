@@ -64,7 +64,7 @@ The score is deliberately not described as a probability.
 
 Modern features are soft context rather than universal exclusion. Buildings and roads receive the strongest penalty, while paths and boundaries remain softer because ancient features can survive beneath or beside modern infrastructure.
 
-Historic England AIM `Detailed_Mapping` remains the known-archaeology reference. From v0.4.3, detection runs before HE exclusion so known features can be measured as positive validation examples. Monument extents and project areas remain contextual display/exclusion layers. The provider fully paginates all three vector layers before analysis. The absence of an AIM record is **unknown**, not negative training evidence.
+Historic England AIM `Detailed_Mapping` remains the known-archaeology reference. From v0.4.4, detection runs before HE exclusion so known features can be measured as positive validation examples. A supervised Random Forest terrain-likelihood model is trained per AOI from Detailed_Mapping positives versus non-HE terrain background; it complements the unsupervised novelty model rather than replacing the transparent morphology channels. Monument extents and project areas remain contextual display/exclusion layers. The provider fully paginates all three vector layers before analysis. The absence of an AIM record is **unknown**, not negative training evidence.
 
 ## V2 boundary
 

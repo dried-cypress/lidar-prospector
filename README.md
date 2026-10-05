@@ -2,9 +2,9 @@
 
 Prospector is a reproducible archaeological landscape prospection tool for combining LiDAR terrain data with heritage, modern-feature and satellite context.
 
-## Version 0.4.3
+## Version 0.4.4
 
-V0.4.3 is the detector-focused release, with Python 3.10 compatibility restored. It keeps the established LiDAR visualisation while adding a hybrid terrain-pattern detector designed to find archaeological-looking structures that do not resemble a single bright local-relief blob.
+V0.4.4 is the detector-focused release, with Python 3.10 compatibility restored. It keeps the established LiDAR visualisation while adding a hybrid terrain-pattern detector designed to find archaeological-looking structures that do not resemble a single bright local-relief blob.
 
 The detector now:
 
@@ -24,11 +24,11 @@ The detector now:
 - uses an unsupervised `IsolationForest` over the terrain feature stack to surface unusual combinations learned from the current AOI
 - exposes every detector channel, threshold and reason in GeoJSON and the HTML report
 
-The ML component is deliberately **not an AI service and is not a trained archaeological classifier**. It learns the distribution of terrain patterns inside the current AOI without human labels. True supervised archaeological learning remains a later stage requiring a reviewed positive/negative corpus.
+The ML component is deliberately **not an AI service**. V0.4.4 combines an unsupervised `IsolationForest` terrain-novelty model with a supervised `RandomForestClassifier` trained locally from Historic England Detailed_Mapping positives versus non-HE background within the current AOI. It is a transparent terrain-likelihood aid rather than a claim of definitive archaeological classification; a reviewed cross-site corpus remains the next step for robust generalisation.
 
 ## Locked LiDAR visualisation
 
-The established archaeological hillshade presentation is kept stable in V0.4.3:
+The established archaeological hillshade presentation is kept stable in V0.4.4:
 
 - 8-direction multidirectional hillshade at 38° altitude
 - blended 70% multidirectional / 30% conventional north-west illumination at 42° altitude
@@ -37,7 +37,7 @@ The established archaeological hillshade presentation is kept stable in V0.4.3:
 - restrained 0.14 elevation tint in the LiDAR/AIM image
 - the anomaly/combined image renderer continues to use the same hillshade and relief visualisation settings as V0.2.1
 
-The generated PNG overlays are therefore a regression target for future versions. V0.4.3 keeps the underlying PNG renderer authoritative: Historic England layers are rasterised directly into the generated PNGs, while the HTML report additionally exposes the same vectors as toggleable overlays.
+The generated PNG overlays are therefore a regression target for future versions. V0.4.4 keeps the underlying PNG renderer authoritative: Historic England layers are rasterised directly into the generated PNGs, while the HTML report additionally exposes the same vectors as toggleable overlays.
 
 ## LiDAR source
 
@@ -117,11 +117,11 @@ prospector analyse --latitude 50.8657 --longitude -0.2405 \
   --os-data /path/to/os-openmap-local-tq.zip
 ```
 
-A GeoPackage, Shapefile ZIP or extracted vector directory can be supplied. V0.4.3 also queries OpenStreetMap as a supplementary source for paths, tracks, fences, hedges and buildings.
+A GeoPackage, Shapefile ZIP or extracted vector directory can be supplied. V0.4.4 also queries OpenStreetMap as a supplementary source for paths, tracks, fences, hedges and buildings.
 
 ## Coordinate naming
 
-The CLI remains coordinate-driven. V0.4.3 also performs an optional reverse-geocode lookup so the report can display a human-readable location name while retaining the exact latitude/longitude as the authoritative input. The default provider is Nominatim; set `PROSPECTOR_GEOCODER_URL` to use another compatible reverse-geocoder, or use `--no-location` to disable the lookup.
+The CLI remains coordinate-driven. V0.4.4 also performs an optional reverse-geocode lookup so the report can display a human-readable location name while retaining the exact latitude/longitude as the authoritative input. The default provider is Nominatim; set `PROSPECTOR_GEOCODER_URL` to use another compatible reverse-geocoder, or use `--no-location` to disable the lookup.
 
 The result is cached as normal Prospector provenance and is not used by the detector.
 
@@ -135,7 +135,7 @@ The spectral signal is deliberately **supporting evidence**, not a classifier. C
 
 ## Detection model
 
-The V0.4.3 detector is intentionally transparent and reproducible:
+The V0.4.4 detector is intentionally transparent and reproducible, with a local HE-trained terrain likelihood model that is evaluated before known-feature exclusion:
 
 ```text
 LiDAR DTM
@@ -206,7 +206,7 @@ The exact set of files depends on whether external providers succeeded.
 
 ## Detection validation and learning
 
-From v0.4.3, Prospector deliberately detects terrain before applying the Historic England exclusion mask. The known Historic England geometries are used as positive reference examples from the current LiDAR DTM, and the report measures how many known features the detector rediscovers. Those matched features are then removed from the final unknown-candidate set.
+From v0.4.4, Prospector deliberately detects terrain before applying the Historic England exclusion mask. The known Historic England geometries are used as positive reference examples from the current LiDAR DTM, and the report measures how many known features the detector rediscovers. Those matched features are then removed from the final unknown-candidate set.
 
 This gives each run a useful recall metric such as `43 / 51 known features validated` instead of silently hiding known archaeology before detection. Candidate similarity is based on LiDAR-derived terrain signatures (shape, multi-scale relief and morphology channels), not on the rendered PNG. The current model is label-guided within the study area rather than a general archaeological classifier; reviewed false positives and missed HE features should become the next training corpus.
 
@@ -267,7 +267,7 @@ The external datasets remain under their respective upstream licences/terms. The
 
 ## Development philosophy
 
-V0.4.3 is deliberately a hybrid discovery system rather than an opaque model. Each candidate records the terrain signals that produced it. Human-reviewed candidate outcomes should eventually become the project's most valuable training data; that corpus can support a future supervised classifier without removing the transparent detector.
+V0.4.4 is deliberately a hybrid discovery system rather than an opaque model. Each candidate records the terrain signals that produced it. Human-reviewed candidate outcomes should eventually become the project's most valuable training data; that corpus can support a future supervised classifier without removing the transparent detector.
 
 ### Fast OS context
 

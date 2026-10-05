@@ -25,6 +25,7 @@ class TerrainCandidate:
     modern_penalty: float = 0.0
     satellite_support: float = 0.0
     he_similarity: float = 0.0
+    archaeology_likelihood_score: float = 0.0
     classification: str = "candidate"
     reasons: tuple[str, ...] = ()
     morphology: tuple[tuple[str, float], ...] = ()
@@ -714,7 +715,8 @@ def _evaluate_known_features(
             + 0.10 * q.get("ridge_valley", 0.0)
             + 0.08 * q.get("texture", 0.0)
             + 0.05 * q.get("terrain_novelty", 0.0)
-            + 0.05 * q.get("coherence", 0.0),
+            + 0.05 * q.get("coherence", 0.0)
+            + 0.15 * q.get("archaeology_likelihood", 0.0),
             0.0, 1.0,
         ))
         descriptor = reference["descriptor"]
@@ -980,6 +982,138 @@ def _terrain_novelty_map(
     }
 
 
+def _he_trained_terrain_likelihood(
+    feature_matrix: np.ndarray,
+    valid: np.ndarray,
+    shape_out: tuple[int, int],
+    transform: Any,
+    aim_features: list[dict[str, Any]],
+    monument_extents: list[dict[str, Any]],
+    pixel_size_m: float,
+    *,
+    sample_size: int,
+    workers: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Learn a terrain-level archaeological likelihood from HE mapped positives.
+
+    This is intentionally a weakly supervised local model: pixels within
+    Detailed Mapping features are positive training examples, while sampled
+    terrain outside known archaeology is background. It is used to generate
+    and rank candidates, not to claim that a pixel is archaeological.
+    """
+    if not aim_features:
+        return np.zeros(shape_out, dtype="float32"), {
+            "enabled": False,
+            "reason": "no_historic_england_detailed_mapping_features",
+        }
+
+    from rasterio.features import rasterize
+    from scipy.ndimage import binary_dilation
+
+    detail_geometry = _geometry_union(
+        aim_features,
+        max(1.5, min(3.5, pixel_size_m * 2.5)),
+    )
+    positive_mask = _rasterise_geometry_mask(detail_geometry, shape_out, transform) & valid.reshape(shape_out)
+    if positive_mask.sum() < 80:
+        return np.zeros(shape_out, dtype="float32"), {
+            "enabled": False,
+            "reason": "too_few_historic_england_positive_pixels",
+            "positive_pixels": int(positive_mask.sum()),
+        }
+
+    blocked_geometry = _geometry_union(
+        aim_features + monument_extents,
+        max(3.0, min(7.0, pixel_size_m * 4.0)),
+    )
+    blocked_mask = _rasterise_geometry_mask(blocked_geometry, shape_out, transform)
+    # Keep a small exclusion halo around training positives. This prevents the
+    # background class from being made artificially easy by adjacent pixels in
+    # the same mapped earthwork.
+    blocked_mask |= binary_dilation(
+        positive_mask,
+        structure=np.ones((max(3, int(round(pixel_size_m)) * 2 + 1),) * 2, dtype=bool),
+    )
+    negative_mask = valid.reshape(shape_out) & ~blocked_mask
+    positive_indices = np.flatnonzero(positive_mask.reshape(-1))
+    negative_indices = np.flatnonzero(negative_mask.reshape(-1))
+    if negative_indices.size < 160:
+        return np.zeros(shape_out, dtype="float32"), {
+            "enabled": False,
+            "reason": "too_few_background_pixels",
+            "positive_pixels": int(positive_indices.size),
+            "negative_pixels": int(negative_indices.size),
+        }
+
+    rng = np.random.default_rng(20261005)
+    positives_n = min(int(max(200, sample_size // 2)), positive_indices.size)
+    negatives_n = min(max(positives_n, int(sample_size // 2)), negative_indices.size)
+    positive_sample = rng.choice(positive_indices, size=positives_n, replace=False)
+    negative_sample = rng.choice(negative_indices, size=negatives_n, replace=False)
+    train_indices = np.concatenate([positive_sample, negative_sample])
+    labels = np.concatenate([
+        np.ones(positive_sample.size, dtype="uint8"),
+        np.zeros(negative_sample.size, dtype="uint8"),
+    ])
+
+    try:
+        from sklearn.ensemble import RandomForestClassifier
+    except ImportError as exc:
+        raise RuntimeError("scikit-learn is required for the HE-trained terrain model") from exc
+
+    model = RandomForestClassifier(
+        n_estimators=160,
+        max_depth=14,
+        min_samples_leaf=8,
+        max_features="sqrt",
+        class_weight="balanced_subsample",
+        random_state=20261005,
+        n_jobs=max(1, workers) if workers else -1,
+    )
+    model.fit(feature_matrix[train_indices], labels)
+
+    height, width = shape_out
+    grid = feature_matrix.reshape(height, width, -1)
+    target_inference_pixels = 100_000
+    spatial_step = max(1, int(np.ceil(np.sqrt((height * width) / target_inference_pixels))))
+    coarse = grid[::spatial_step, ::spatial_step].reshape(-1, grid.shape[-1])
+    coarse_valid = valid.reshape(shape_out)[::spatial_step, ::spatial_step].reshape(-1)
+    coarse_indices = np.flatnonzero(coarse_valid)
+    probabilities = model.predict_proba(coarse[coarse_indices])[:, 1].astype("float32")
+    coarse_map = np.zeros(coarse_valid.shape, dtype="float32")
+    coarse_map[coarse_indices] = probabilities
+    coarse_map = coarse_map.reshape(
+        (height + spatial_step - 1) // spatial_step,
+        (width + spatial_step - 1) // spatial_step,
+    )
+    from scipy.ndimage import zoom
+    likelihood = zoom(
+        coarse_map,
+        (height / coarse_map.shape[0], width / coarse_map.shape[1]),
+        order=1,
+        mode="nearest",
+        prefilter=False,
+    ).astype("float32")[:height, :width]
+    likelihood[~valid.reshape(shape_out)] = 0.0
+
+    return likelihood, {
+        "enabled": True,
+        "model": "RandomForestClassifier",
+        "training_scope": "current AOI; Historic England Detailed Mapping positives vs non-HE background",
+        "positive_source": "Historic England Detailed_Mapping geometry",
+        "positive_pixels_available": int(positive_indices.size),
+        "negative_pixels_available": int(negative_indices.size),
+        "positive_pixels_sampled": int(positive_sample.size),
+        "negative_pixels_sampled": int(negative_sample.size),
+        "n_estimators": 160,
+        "max_depth": 14,
+        "min_samples_leaf": 8,
+        "inference_pixels": int(coarse_indices.size),
+        "spatial_step": int(spatial_step),
+        "random_seed": 20261005,
+    }
+
+
 def _sensitivity_profile(name: str | int) -> SensitivityProfile:
     raw = str(name).casefold().strip()
     aliases = {"low": 2, "medium": 5, "high": 8}
@@ -1013,7 +1147,7 @@ def detect_terrain_anomalies(
     """Discover, evaluate against known archaeology, then rank unknown terrain candidates."""
     import rasterio
     from rasterio.features import shapes
-    from scipy.ndimage import binary_closing, find_objects, label
+    from scipy.ndimage import binary_closing, binary_dilation, find_objects, label, maximum_filter
     from prospector.terrain.context import build_modern_context_raster
 
     profile = _sensitivity_profile(sensitivity)
@@ -1080,10 +1214,29 @@ def detect_terrain_anomalies(
     )
     terrain_novelty = terrain_novelty.reshape(shape_out)
 
-    discovery = (
-        0.25 * max_relief + 0.13 * persistence + 0.16 * linear_score + 0.13 * annular
-        + 0.11 * ridge_valley + 0.08 * texture + 0.10 * terrain_novelty + 0.04 * coherence
+    archaeology_likelihood, archaeology_model_metadata = _he_trained_terrain_likelihood(
+        feature_matrix,
+        valid.reshape(-1),
+        shape_out,
+        transform,
+        aim_features,
+        monument_extents,
+        max(abs(x_resolution), abs(y_resolution)),
+        sample_size=min(24000 + profile.level * 2500, 60000),
+        workers=workers,
+    )
+
+    if archaeology_model_metadata.get("enabled"):
+        discovery = (
+            0.18 * max_relief + 0.11 * persistence + 0.13 * linear_score + 0.10 * annular
+            + 0.09 * ridge_valley + 0.07 * texture + 0.07 * terrain_novelty + 0.03 * coherence
+            + 0.22 * archaeology_likelihood
     ).astype("float32")
+    else:
+        discovery = (
+            0.25 * max_relief + 0.13 * persistence + 0.16 * linear_score + 0.13 * annular
+            + 0.11 * ridge_valley + 0.08 * texture + 0.10 * terrain_novelty + 0.04 * coherence
+        ).astype("float32")
     discovery[~valid] = 0.0
     diagnostic_dir = diagnostic_raster_dir or dtm_path.parent
     diagnostic_outputs: dict[str, str] = {}
@@ -1092,17 +1245,39 @@ def detect_terrain_anomalies(
         ("terrain-novelty.tif", terrain_novelty),
         ("ring-response.tif", annular),
         ("ridge-valley-response.tif", ridge_valley),
+        ("archaeology-likelihood.tif", archaeology_likelihood),
     ):
         output = _write_diagnostic_raster(diagnostic_dir / filename, values, dtm_path)
         diagnostic_outputs[filename.removesuffix(".tif").replace("-", "_")] = str(output)
     if not valid.any():
-        return [], {"name": "hybrid-terrain-pattern-detector", "version": "0.4.3", "status": "no-data"}
+        return [], {"name": "hybrid-terrain-pattern-detector", "version": "0.4.4", "status": "no-data"}
 
     threshold = float(np.percentile(discovery[valid], profile.threshold_percentile))
     seed_threshold = float(np.percentile(discovery[valid], profile.seed_percentile))
     linear_threshold = float(np.percentile(linear_score[valid], profile.linear_percentile))
     annular_threshold = float(np.percentile(annular[valid], profile.annular_percentile))
     novelty_threshold = float(np.percentile(terrain_novelty[valid], profile.novelty_percentile))
+    pixel_size_m = max(abs(x_resolution), abs(y_resolution))
+    learned_seed_percentile = max(70.0, 88.0 - profile.level * 1.5)
+    learned_seed_threshold = float(np.percentile(archaeology_likelihood[valid], learned_seed_percentile))
+    # A learned archaeological likelihood is allowed to seed a candidate at
+    # level 5 even when the terrain is not an extreme global outlier. The seed
+    # is restricted to local maxima so broad high-likelihood plateaus do not
+    # turn the whole AOI into one component.
+    learned_floor = max(0.30, 0.57 - profile.level * 0.024)
+    learned_seed_threshold = max(learned_floor, learned_seed_threshold) if archaeology_model_metadata.get("enabled") else 1.0
+    if archaeology_model_metadata.get("enabled"):
+        peak_window_m = 10.0 + profile.level * 1.5
+        peak_window_px = _resolution_pixels(peak_window_m, x_resolution, y_resolution, minimum=5)
+        local_maxima = archaeology_likelihood >= maximum_filter(
+            archaeology_likelihood, size=peak_window_px, mode="nearest"
+        )
+        learned_peaks = local_maxima & (archaeology_likelihood >= learned_seed_threshold) & valid
+        learned_dilation_px = max(1, min(6, int(round((4.0 + profile.level * 0.4) / max(pixel_size_m, 1e-6)))))
+        archaeology_seed = binary_dilation(learned_peaks, iterations=learned_dilation_px) & valid
+    else:
+        learned_peaks = np.zeros(shape_out, dtype=bool)
+        archaeology_seed = np.zeros(shape_out, dtype=bool)
     straight_line_mask = _straight_line_support_mask(
         linear_score, x_resolution, y_resolution,
         threshold_percentile=profile.linear_percentile,
@@ -1110,7 +1285,7 @@ def detect_terrain_anomalies(
         dilation_m=max(1.5, 3.0 - profile.level * 0.12),
     ) & valid
 
-    # Candidate generation is deliberately recall-oriented from v0.4.3 onward.
+    # Candidate generation is deliberately recall-oriented from v0.4.4 onward.
     # Several weak-but-correlated terrain channels can seed one candidate even
     # when no individual channel is extreme. The learned HE reference stage
     # below then ranks candidates, rather than using HE as a pre-detection mask.
@@ -1143,6 +1318,7 @@ def detect_terrain_anomalies(
         | (annular >= annular_threshold)
         | (terrain_novelty >= novelty_threshold)
         | (ridge_valley >= max(0.50, 0.80 - profile.level * 0.025))
+        | archaeology_seed
     ) & valid
     combined_mask = (
         (discovery >= threshold) | pattern_seed | straight_line_mask
@@ -1207,7 +1383,6 @@ def detect_terrain_anomalies(
     for geometry_data, value in shapes(labels.astype("int32"), mask=labels > 0, transform=transform):
         candidate_geometries.setdefault(int(value), []).append(shape(geometry_data))
 
-    pixel_size_m = max(abs(x_resolution), abs(y_resolution))
     terrain_channels = {
         "discovery": discovery,
         "max_relief": max_relief,
@@ -1218,6 +1393,7 @@ def detect_terrain_anomalies(
         "texture": texture,
         "coherence": coherence,
         "terrain_novelty": terrain_novelty,
+        "archaeology_likelihood": archaeology_likelihood,
     }
     he_references = _he_reference_bank(aim_features, terrain_channels, transform, pixel_size_m)
     he_validation = _evaluate_known_features(
@@ -1318,6 +1494,7 @@ def detect_terrain_anomalies(
         ridge_local = ridge_valley[component_slice]
         texture_local = texture[component_slice]
         persistence_local = persistence[component_slice]
+        archaeology_local = archaeology_likelihood[component_slice]
 
         discovery_strength = float(np.quantile(discovery_local[score_pixels], 0.82))
         relief_values = np.abs(strongest_relief_local[score_pixels])
@@ -1329,6 +1506,7 @@ def detect_terrain_anomalies(
         novelty_tail = float(np.clip(_raster_tail_mean_values(novelty_local, score_pixels, 0.72), 0.0, 1.0))
         ridge_tail = float(np.clip(_raster_tail_mean_values(ridge_local, score_pixels, 0.72), 0.0, 1.0))
         texture_tail = float(np.clip(_raster_tail_mean_values(texture_local, score_pixels, 0.72), 0.0, 1.0))
+        archaeology_tail = float(np.clip(_raster_tail_mean_values(archaeology_local, score_pixels, 0.72), 0.0, 1.0))
         lidar_strength = float(np.clip(np.quantile(max_relief_local[score_pixels], 0.85), 0.0, 1.0))
         persistence_score = float(np.mean(np.stack([(z_scores[scale][component_slice][score_pixels] >= persistence_cutoff).astype("float32") for scale in sorted(z_scores)], axis=0)))
         shape_score = _morphology_score(morphology, linear_tail)
@@ -1344,6 +1522,7 @@ def detect_terrain_anomalies(
             "texture": texture_local,
             "coherence": coherence[component_slice],
             "terrain_novelty": novelty_local,
+            "archaeology_likelihood": archaeology_local,
         }
         learned_descriptor = _candidate_descriptor(morphology, candidate_channels, score_pixels)
         learned_he_similarity, he_match_type, he_match_uid = _he_similarity_against_bank(
@@ -1360,11 +1539,11 @@ def detect_terrain_anomalies(
         base = (
             0.28 * discovery_strength + 0.15 * lidar_strength + 0.12 * persistence_score
             + 0.10 * shape_score + 0.10 * linear_tail + 0.10 * annular_tail
-            + 0.07 * ridge_tail + 0.08 * novelty_tail + 0.04 * texture_tail
-            + 0.02 * satellite_support + 0.08 * he_similarity
+            + 0.07 * ridge_tail + 0.06 * novelty_tail + 0.04 * texture_tail
+            + 0.18 * archaeology_tail + 0.02 * satellite_support + 0.08 * he_similarity
             + linear_bonus + ring_bonus + novelty_bonus
         )
-        final_score = 100.0 * max(0.0, base * context_weight)
+        final_score = 100.0 * float(np.clip(base * context_weight, 0.0, 1.0))
 
         reasons: list[str] = []
         if shape_score >= 0.63: reasons.append("coherent archaeological morphology")
@@ -1375,6 +1554,7 @@ def detect_terrain_anomalies(
         if ridge_tail >= 0.60: reasons.append("ridge/valley relief signature")
         if novelty_tail >= 0.58: reasons.append("unusual terrain pattern learned within this AOI")
         if texture_tail >= 0.58: reasons.append("distinctive local terrain texture")
+        if archaeology_tail >= 0.62: reasons.append("terrain pattern learned from Historic England archaeology")
         if satellite_support >= 0.20: reasons.append("satellite vegetation/reflectance anomaly supports the terrain signal")
         if he_similarity >= 0.68:
             reasons.append(f"LiDAR terrain signature resembles known Historic England {he_match_type or 'feature'}")
@@ -1401,6 +1581,7 @@ def detect_terrain_anomalies(
             modern_penalty=100.0 * modern_penalty,
             satellite_support=100.0 * satellite_support,
             he_similarity=100.0 * he_similarity,
+            archaeology_likelihood_score=100.0 * archaeology_tail,
             classification="candidate",
             reasons=tuple(reasons),
             morphology=tuple(sorted((key, float(value)) for key, value in morphology.items())),
@@ -1440,6 +1621,7 @@ def detect_terrain_anomalies(
             modern_penalty=item.modern_penalty,
             satellite_support=item.satellite_support,
             he_similarity=item.he_similarity,
+            archaeology_likelihood_score=item.archaeology_likelihood_score,
             classification="high-priority" if item.score >= (74.0 - profile.level * 0.8) else "candidate",
             reasons=item.reasons,
             morphology=item.morphology,
@@ -1456,18 +1638,23 @@ def detect_terrain_anomalies(
 
     metadata = {
         "name": "hybrid-terrain-pattern-detector",
-        "version": "0.4.3",
+        "version": "0.4.4",
         "sensitivity": profile.level,
         "sensitivity_description": "1=very conservative, 5=balanced research setting with HE recall validation, 10=maximum exploratory recall",
         "workers_requested": workers,
         "workers_auto_cap": 6,
         "scales_m": list(reliefs),
         "discovery_channels": {
-            "local_relief": 0.25, "persistence": 0.13, "linear": 0.16,
-            "annular_ring": 0.13, "ridge_valley": 0.11, "texture": 0.08,
-            "terrain_novelty_ml": 0.10, "surface_coherence": 0.04,
+            "local_relief": 0.18, "persistence": 0.11, "linear": 0.13,
+            "annular_ring": 0.10, "ridge_valley": 0.09, "texture": 0.07,
+            "terrain_novelty_ml": 0.07, "surface_coherence": 0.03,
+            "he_trained_archaeology_likelihood": 0.22,
         },
-        "machine_learning": novelty_metadata,
+        "machine_learning": {
+            "model": novelty_metadata.get("model", "IsolationForest"),
+            "terrain_novelty": novelty_metadata,
+            "he_trained_archaeology": archaeology_model_metadata,
+        },
         "threshold_percentile": profile.threshold_percentile,
         "seed_percentile": profile.seed_percentile,
         "adaptive_broad_seed_percentile": seed_percentile,
@@ -1480,6 +1667,11 @@ def detect_terrain_anomalies(
         "linear_threshold": linear_threshold,
         "annular_threshold": annular_threshold,
         "novelty_threshold": novelty_threshold,
+        "learned_archaeology_seed_percentile": learned_seed_percentile,
+        "learned_archaeology_seed_threshold": learned_seed_threshold,
+        "learned_archaeology_seed_floor": learned_floor,
+        "learned_archaeology_peak_count": int(learned_peaks.sum()),
+        "learned_archaeology_peak_window_m": peak_window_m if archaeology_model_metadata.get("enabled") else None,
         "straight_line_seeded": True,
         "minimum_hough_line_length_m": profile.min_line_length_m,
         "min_area_m2": profile.min_area_m2,
@@ -1513,6 +1705,7 @@ def detect_terrain_anomalies(
         },
         "historic_england_validation": he_validation,
         "provisional_statistics": stats,
+        "he_trained_archaeology": archaeology_model_metadata,
         "warning": (
             "The detector uses deterministic terrain morphology, a per-AOI unsupervised novelty model, "
             "and a LiDAR terrain-signature reference bank derived from Historic England features. "

@@ -50,7 +50,7 @@ def test_detect_terrain_anomalies_returns_candidates(tmp_path: Path) -> None:
 
     candidates, metadata = detect_terrain_anomalies(dtm, [])
     assert metadata["name"] == "hybrid-terrain-pattern-detector"
-    assert metadata["version"] == "0.4.3"
+    assert metadata["version"] == "0.4.4"
     assert metadata["sensitivity"] == 5
     assert metadata["machine_learning"]["model"] == "IsolationForest"
     assert candidates
@@ -257,9 +257,10 @@ def test_ring_and_novelty_channels_identify_closed_terrain_pattern(tmp_path: Pat
     assert strongest.ring_score >= 80.0
     assert strongest.terrain_novelty_score > 0.0
     assert "ring/bank morphology" in strongest.reasons
-    assert set(metadata["diagnostic_rasters"]) == {
-        "discovery_score", "terrain_novelty", "ring_response", "ridge_valley_response"
-    }
+    assert {
+        "discovery_score", "terrain_novelty", "ring_response", "ridge_valley_response",
+        "archaeology_likelihood",
+    } <= set(metadata["diagnostic_rasters"])
 
 
 def test_sensitivity_ten_is_explicitly_exploratory(tmp_path: Path) -> None:
@@ -348,4 +349,5 @@ def test_candidate_receives_lidar_signature_match_to_known_he_feature(tmp_path: 
     learned = max(candidates, key=lambda candidate: candidate.he_similarity)
     assert learned.he_similarity > 50.0
     assert learned.he_match_type
+    assert 0.0 <= learned.score <= 100.0
     assert metadata["historic_england_reference"]["reference_count"] == 1
