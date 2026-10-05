@@ -20,7 +20,6 @@ from prospector.providers.lidar import DTM_COVERAGE_ID, WCS_URL, LidarProvider
 from prospector.providers.location import DEFAULT_REVERSE_GEOCODER_URL, LocationProvider
 from prospector.providers.openstreetmap import OpenStreetMapContextProvider
 from prospector.providers.os import OSFeaturesProvider, OSOpenMapProvider
-from prospector.providers.satellite import SatelliteProvider
 from prospector.reporting.geojson import write_candidate_collection, write_feature_collection
 from prospector.reporting.html import write_html_report
 from prospector.reporting.overlay import (
@@ -173,7 +172,7 @@ def analyse(
     no_satellite: bool = typer.Option(
         False,
         "--no-satellite",
-        help="Disable Sentinel-2 contextual imagery acquisition.",
+        help="Disable high-resolution imagery acquisition (legacy option name); Sentinel-2 is no longer acquired.",
     ),
     no_location: bool = typer.Option(
         False,
@@ -244,8 +243,6 @@ def analyse(
             location_cache.append(location_result.cache_entry)
         if location_result.error:
             errors.append(f"Location lookup failed: {location_result.error}")
-        elif location_name:
-            console.print(f"Location: {location_name}")
     else:
         console.print("Location lookup disabled")
     study_bbox = area.bounds
@@ -315,6 +312,14 @@ def analyse(
             "not available through the downloadable vector FeatureServer.[/yellow]"
         )
     console.print(f"  Cache: {he_hits} hit(s), {len(he_cache) - he_hits} download(s)")
+    from prospector.providers.location import best_heritage_feature_name
+    heritage_name = best_heritage_feature_name(aim + monument_extents, area.easting, area.northing)
+    if heritage_name:
+        location_name = heritage_name
+        location_display_name = heritage_name
+        location_metadata = {**location_metadata, "name_source": "Historic England AIM named feature", "name_override": heritage_name}
+    if location_name:
+        console.print(f"Location: {location_name}")
 
     # LiDAR acquisition and the locked V0.2.1 renderer.
     console.print("[bold]NLS Maps LiDAR DTM 50cm-1m — England component[/bold]")
@@ -358,7 +363,7 @@ def analyse(
     satellite_support_path: Path | None = None
     satellite_preview_path: Path | None = None
     satellite_search_path: Path | None = None
-    satellite_metadata: dict[str, Any] = {"enabled": False}
+    satellite_metadata: dict[str, Any] = {"enabled": False, "provider": "none", "status": "disabled"}
     highres_imagery_path: Path | None = None
     highres_imagery_metadata: dict[str, Any] = {"enabled": False}
 
@@ -415,7 +420,8 @@ def analyse(
         console.print("[bold]Modern feature context — OpenStreetMap supplement[/bold]")
         if not no_osm:
             try:
-                osm_result = OpenStreetMapContextProvider(client).search(_raster_bounds(dtm_output))
+                osm_client = HttpClient(config.cache_dir, min(20.0, config.request_timeout_seconds))
+                osm_result = OpenStreetMapContextProvider(osm_client).search(_raster_bounds(dtm_output))
                 modern_features.extend(osm_result.features)
                 context_cache.extend(osm_result.cache_entries)
                 errors.extend(osm_result.errors)
@@ -468,35 +474,19 @@ def analyse(
         if no_context:
             context_metadata = {"enabled": False}
 
-    if dtm_output is not None and dtm_output.is_file() and not no_context and not no_satellite:
-        console.print("[bold]Satellite context — Sentinel-2 L2A[/bold]")
-        try:
-            satellite_result = SatelliteProvider(client).acquire(
-                _raster_bounds(dtm_output), dtm_output, run_path
-            )
-            satellite_support_path = satellite_result.support_path
-            satellite_preview_path = satellite_result.preview_path
-            satellite_search_path = satellite_result.search_path
-            satellite_metadata = satellite_result.metadata
-            context_cache.extend(satellite_result.cache_entries)
-            errors.extend(satellite_result.errors)
-            console.print(f"  Selected scenes: {len(satellite_result.scenes)}")
-            if satellite_support_path:
-                console.print(f"[green]  Satellite support raster:[/green] {satellite_support_path}")
-            if satellite_preview_path:
-                # v0.4.4 keeps Sentinel-2 out of the visual map; high-resolution World Imagery is the visual base layer.
-                satellite_preview_path.unlink(missing_ok=True)
-                satellite_preview_path = None
-        except Exception as exc:
-            errors.append(f"Satellite context processing failed: {exc}")
-            console.print(f"[yellow]  Satellite context failed:[/yellow] {exc}")
-    elif not no_satellite and dtm_output is None:
-        satellite_metadata = {"enabled": False, "reason": "no DTM"}
+    # Sentinel-2 is intentionally removed from the visual/context pipeline in v0.5.3.
+    # It has repeatedly failed upstream and is not useful enough for archaeological
+    # inspection to justify slowing or polluting a run with warnings.
+    satellite_support_path: Path | None = None
+    satellite_preview_path: Path | None = None
+    satellite_search_path: Path | None = None
+    satellite_metadata = {"enabled": False, "provider": "none", "status": "disabled"}
 
-    if dtm_output is not None and dtm_output.is_file() and not no_satellite:
-        console.print("[bold]High-resolution imagery — Esri World Imagery[/bold]")
+    if dtm_output is not None and dtm_output.is_file() and not no_context and not no_satellite:
+        console.print("[bold]High-resolution imagery — OpenAerialMap[/bold]")
         try:
-            imagery_result = HighResolutionImageryProvider(client).acquire(
+            imagery_client = HttpClient(config.cache_dir, min(15.0, config.request_timeout_seconds))
+            imagery_result = HighResolutionImageryProvider(imagery_client).acquire(
                 _raster_bounds(dtm_output), run_path, reference_raster=dtm_output
             )
             highres_imagery_path = imagery_result.preview_path
@@ -508,7 +498,9 @@ def analyse(
         except Exception as exc:
             errors.append(f"High-resolution imagery processing failed: {exc}")
             console.print(f"[yellow]  High-resolution imagery failed:[/yellow] {exc}")
-    elif not no_satellite and dtm_output is None:
+    elif no_satellite or no_context:
+        highres_imagery_metadata = {"enabled": False, "reason": "disabled"}
+    elif dtm_output is None:
         highres_imagery_metadata = {"enabled": False, "reason": "no DTM"}
 
     overlay_output: Path | None = None
@@ -581,7 +573,7 @@ def analyse(
             create_lidar_anomaly_aim_overlay(
                 dtm_output, candidates, aim, anomaly_aim_overlay_output,
                 monument_extents=monument_extents,
-                project_areas=project_areas,
+                project_areas=[],
             )
             he_reference = anomaly_metadata.get("historic_england_reference", {})
             if he_reference.get("known_validation_total", 0):

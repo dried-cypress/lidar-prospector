@@ -15,7 +15,7 @@ from prospector.providers.historic_england import HistoricEnglandProvider
 from prospector.providers.http import HttpClient
 from prospector.providers.lidar import LidarProvider
 from prospector.training.db import ensure_schema, query_features, register_model, upsert_features
-from prospector.training.features import DEFAULT_ROTATIONS, DEFAULT_SCALES_M, patch_from_raster
+from prospector.training.features import DEFAULT_ROTATIONS, DEFAULT_SCALES_M, FEATURE_VERSION, patch_from_raster
 from prospector.training.model import train_model
 
 
@@ -128,7 +128,7 @@ def build_dataset(
     features_by_tile: dict[Path, list[dict[str, Any]]],
     output_dir: Path,
     *,
-    negative_multiplier: int = 2,
+    negative_multiplier: int = 6,
     max_features: int | None = None,
     scales: tuple[float, ...] = DEFAULT_SCALES_M,
     rotations: tuple[float, ...] = DEFAULT_ROTATIONS,
@@ -201,7 +201,7 @@ def build_dataset(
     np.savez_compressed(dataset_path, X=x, y=y, groups=group_array)
     _write_dataset_manifest(output_dir, rows)
     metadata = {
-        "feature_version": "patch-v1",
+        "feature_version": FEATURE_VERSION,
         "examples": int(len(y)),
         "positive_examples": int(positive_count),
         "negative_examples": int(negative_count),

@@ -2,11 +2,11 @@
 
 Prospector is a reproducible archaeological landscape prospection tool for combining LiDAR terrain data with heritage, modern-feature and satellite context.
 
-## Version 0.5.2
+## Version 0.5.3
 
 V0.4.4 is the detector-focused release, with Python 3.10 compatibility restored. It keeps the established LiDAR visualisation while adding a hybrid terrain-pattern detector designed to find archaeological-looking structures that do not resemble a single bright local-relief blob.
 
-V0.5.2 is the training-stack maintenance release. It fixes Docker training images so the geospatial and training dependency sets are installed explicitly, adds build-time dependency verification, and retains the local-first HE/LiDAR learning pipeline introduced in V0.5.0.
+V0.5.3 extends the local training stack so the persisted model participates directly in candidate generation and ranking, replaces unreliable visual imagery services, and removes Sentinel-2 from normal analysis. It fixes Docker training images so the geospatial and training dependency sets are installed explicitly, adds build-time dependency verification, and retains the local-first HE/LiDAR learning pipeline introduced in V0.5.0.
 
 The detector now:
 
@@ -17,7 +17,7 @@ The detector now:
 - optionally accepts local OS OpenMap Local data with `--os-data`
 - supplements OS transport/building coverage with OpenStreetMap paths, tracks, fences, hedges and buildings
 - creates a soft modernity penalty rather than blindly deleting every mapped path or boundary
-- uses Sentinel-2 only as optional spectral context and downloads high-resolution Esri World Imagery for visual inspection
+- uses direct LiDAR terrain analysis and downloads high-resolution OpenAerialMap imagery for visual inspection
 - derives a multi-scene satellite spectral-support raster from local NDVI anomalies
 - compares candidate geometry against known Historic England AIM feature geometry as a deterministic LiDAR terrain-signature reference prior
 - measures annular/ring response for enclosures, barrows and bank-like closed forms
@@ -86,9 +86,9 @@ This distinction matters because archaeological routeways and boundaries can sur
 
 ### High-resolution visual imagery
 
-Prospector uses **[Esri World Imagery](https://developers.arcgis.com/rest/basemap-styles/service-data/)** as the visual aerial/satellite base layer in the interactive report. The application requests an AOI-aligned PNG from the World Imagery map service at up to 2048 pixels across, so a 1 km study area is rendered at roughly 0.49 m per output pixel. Source resolution varies by location: World Imagery is a compilation of satellite and aerial imagery, with high-resolution sources used in many areas.
+Prospector uses **[OpenAerialMap](https://docs.imagery.hotosm.org/usage/using-imagery/)** as the automatic high-resolution visual imagery base. It downloads XYZ imagery tiles, mosaics them in Web Mercator, then reprojects the result onto the exact LiDAR raster grid in EPSG:27700. The imagery is rendered into the same map canvas as the LiDAR layers, so vector overlays and imagery share the same geographic extent and pixel grid.
 
-Sentinel-2 is retained only as optional spectral context for detector scoring. It is no longer used as the visual base layer because its 10 m imagery is not appropriate for detailed inspection of small archaeological earthworks.
+Sentinel-2 is no longer acquired by the analysis pipeline. It is deliberately excluded because its 10 m imagery is not appropriate for detailed inspection of small archaeological earthworks and the upstream service has repeatedly produced unreliable responses.
 
 ### OS Data Hub API signup
 
@@ -129,15 +129,15 @@ The result is cached as normal Prospector provenance and is not used by the dete
 
 ## Satellite context
 
-Prospector uses Sentinel-2 Level-2A data via the Microsoft Planetary Computer STAC API. The service exposes a public STAC catalogue and Sentinel-2 data without requiring a user account for catalogue discovery; file access uses short-lived signed asset URLs. An optional `PC_SDK_SUBSCRIPTION_KEY` can be exported to use the Planetary Computer subscription-key rate-limit tier.
+The historical Sentinel-2 provider remains in the source tree for backwards compatibility, but it is disabled in normal analysis. New runs do not make Planetary Computer asset requests.
 
-For each run, Prospector selects several relatively clear observations across time rather than trusting a single image. It calculates local NDVI anomaly support for each scene and uses the median support across selected scenes when ranking candidates. Sentinel-2 does not produce a visual base image in the interactive map. High-resolution Esri World Imagery provides the visual aerial/satellite base instead; Sentinel-2 remains an optional spectral support layer for detector scoring.
+The visual map uses OpenAerialMap. The downloaded imagery is presentation-only: the anomaly detector never reads the imagery, rendered overlays, or HTML. The detector operates on the numeric LiDAR DTM and vector context.
 
-The spectral signal is deliberately **supporting evidence**, not a classifier. Cropmarks and vegetation responses may strengthen a candidate, but modern vegetation boundaries can also produce a response and are handled separately through mapped context. Sentinel-2 scenes are streamed as remote COG windows; Prospector stores the derived support raster and STAC provenance rather than copying complete Sentinel-2 scenes into every run.
+The imagery layer is deliberately **visual evidence only**. It is there for archaeological inspection of candidates; it is not part of the ML feature vector or candidate-generation input.
 
 ## Detection model
 
-The V0.4.4 detector is intentionally transparent and reproducible, with a local HE-trained terrain likelihood model that is evaluated before known-feature exclusion:
+The V0.5.3 detector is intentionally transparent and reproducible, with a local HE-trained terrain likelihood model that is evaluated before known-feature exclusion:
 
 ```text
 LiDAR DTM
@@ -239,9 +239,9 @@ Do not use a system/user-site `pip` to install Prospector. The important invaria
 
 ## Docker training stack
 
-V0.5.2's Docker image explicitly installs the `geo` and `training` extras and the native runtime libraries required by the compiled geospatial/scientific wheels. The image build verifies that Rasterio, NumPy, SciPy, scikit-image, Matplotlib, Pillow, Fiona, Joblib, psycopg and the related geospatial dependencies import successfully before the image is accepted.
+V0.5.3's Docker image explicitly installs the `geo` and `training` extras and the native runtime libraries required by the compiled geospatial/scientific wheels. The image build verifies that Rasterio, NumPy, SciPy, scikit-image, Matplotlib, Pillow, Fiona, Joblib, psycopg and the related geospatial dependencies import successfully before the image is accepted.
 
-After updating a checkout to V0.5.2, you do not need to stop the database container. Rebuild the application/trainer images so the corrected dependency set is installed:
+After updating a checkout to V0.5.3, you do not need to stop the database container. Rebuild the application/trainer images so the corrected dependency set is installed:
 
 ```bash
 docker compose build --no-cache app trainer
@@ -268,7 +268,8 @@ docker compose run --rm trainer prospector train build-dataset \
   --xmax 528000 --ymax 114000 \
   --tile-size 1000 \
   --max-tiles 25 \
-  --max-features 100
+  --max-features 100 \
+  --negative-multiplier 6
 ```
 
 The `build-dataset` step requires the geospatial dependencies and is therefore intentionally run in the trainer image.

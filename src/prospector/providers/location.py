@@ -174,3 +174,71 @@ class LocationProvider:
     def _validate(payload: Any) -> None:
         if not isinstance(payload, dict):
             raise ValueError("Reverse geocoder response was not a JSON object")
+
+
+def best_heritage_feature_name(
+    features: list[dict[str, Any]],
+    easting: float,
+    northing: float,
+    *,
+    max_distance_m: float = 3000.0,
+) -> str | None:
+    """Return the nearest useful named archaeological landscape feature.
+
+    Historic England feature exports can carry different name fields depending
+    on the source/project. Prefer explicit site/feature names and ignore pure
+    identifiers or generic monument types.
+    """
+    from shapely.geometry import Point, shape
+
+    point = Point(float(easting), float(northing))
+    preferred_keys = (
+        "NAME", "NAME_1", "NAME_2", "SITE_NAME", "MONUMENT_NAME",
+        "FEATURE_NAME", "SITE", "PLACE_NAME", "LOCATION",
+    )
+    semantic_bonus = ("hill", "barrow", "camp", "fort", "earthwork", "enclosure", "castle", "settlement")
+    best: tuple[float, str] | None = None
+    for feature in features:
+        properties = feature.get("properties") or {}
+        geometry_data = feature.get("geometry")
+        if not geometry_data:
+            continue
+        try:
+            distance = point.distance(shape(geometry_data))
+        except Exception:
+            continue
+        if distance > max_distance_m:
+            continue
+        seen_names: set[str] = set()
+        candidate_values: list[tuple[int, str]] = []
+        for key_index, key in enumerate(preferred_keys):
+            raw = properties.get(key)
+            if isinstance(raw, str) and raw.strip():
+                candidate_values.append((key_index, raw.strip()))
+        # HE project exports are not perfectly schema-stable. Accept other
+        # name/site/location/place/monument fields when present, while avoiding
+        # identifiers and generic classification values.
+        for raw_key, raw_value in properties.items():
+            key_lower = str(raw_key).casefold()
+            if not any(token in key_lower for token in ("name", "site", "place", "location", "monument")):
+                continue
+            if any(token in key_lower for token in ("uid", "guid", "id", "type", "period", "evidence", "source")):
+                continue
+            if isinstance(raw_value, str) and raw_value.strip():
+                candidate_values.append((len(preferred_keys), raw_value.strip()))
+
+        for key_index, name in candidate_values:
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            lowered = name.casefold()
+            if lowered in {"unknown", "unnamed", "-", "n/a"}:
+                continue
+            score = -distance + (500.0 - min(key_index, len(preferred_keys)) * 60.0)
+            if any(token in lowered for token in semantic_bonus):
+                score += 600.0
+            if len(name) > 90:
+                score -= 150.0
+            if best is None or score > best[0]:
+                best = (score, name)
+    return best[1] if best else None

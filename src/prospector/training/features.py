@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-FEATURE_VERSION = "patch-v1"
+FEATURE_VERSION = "patch-v2"
 PATCH_PIXELS = 32
 DEFAULT_SCALES_M = (32.0, 64.0, 128.0)
 DEFAULT_ROTATIONS = (0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0)
@@ -54,6 +54,36 @@ def _channels(elevation: np.ndarray, x_resolution: float, y_resolution: float) -
     return elevation.astype("float32"), slope, laplacian
 
 
+def _canonical_orientation_deg(image: np.ndarray) -> float:
+    """Estimate a stable major-axis orientation in image coordinates.
+
+    Archaeological forms such as banks and enclosures may occur at arbitrary
+    azimuths. Aligning the terrain patch to its dominant second-moment axis
+    makes the learned descriptor much less sensitive to absolute orientation.
+    Near-circular patches naturally have little directional preference.
+    """
+    yy, xx = np.mgrid[:image.shape[0], :image.shape[1]].astype("float32")
+    weights = np.abs(image).astype("float32") + 1e-3
+    total = float(weights.sum())
+    if total <= 0.0:
+        return 0.0
+    cx = float((xx * weights).sum() / total)
+    cy = float((yy * weights).sum() / total)
+    dx = xx - cx
+    dy = yy - cy
+    mu20 = float((dx * dx * weights).sum() / total)
+    mu02 = float((dy * dy * weights).sum() / total)
+    mu11 = float((dx * dy * weights).sum() / total)
+    covariance = np.array([[mu20, mu11], [mu11, mu02]], dtype="float64")
+    values, vectors = np.linalg.eigh(covariance)
+    if values.size < 2 or float(values[-1]) <= 1e-9:
+        return 0.0
+    vector = vectors[:, -1]
+    angle = float(np.degrees(np.arctan2(vector[0], vector[1])))
+    # Eigenvectors are sign-ambiguous; reduce to [0, 180) so opposite
+    # directions represent the same physical orientation.
+    return angle % 180.0
+
 def descriptor_from_array(
     elevation: np.ndarray,
     x_resolution: float,
@@ -73,6 +103,12 @@ def descriptor_from_array(
     if rotation_deg:
         channels = [
             rotate(channel, rotation_deg, reshape=False, order=1, mode="reflect", prefilter=False).astype("float32")
+            for channel in channels
+        ]
+    canonical_deg = _canonical_orientation_deg(channels[0])
+    if abs(canonical_deg) > 0.5:
+        channels = [
+            rotate(channel, -canonical_deg, reshape=False, order=1, mode="reflect", prefilter=False).astype("float32")
             for channel in channels
         ]
     radial = _radial_signature(channels[0])
@@ -122,6 +158,41 @@ def _orientation_invariant_moments(image: np.ndarray) -> np.ndarray:
     ], dtype="float32")
 
 
+def descriptor_from_dataset(
+    dataset: Any,
+    centre_x: float,
+    centre_y: float,
+    scale_m: float,
+    *,
+    rotation_deg: float = 0.0,
+) -> np.ndarray:
+    """Extract one LiDAR descriptor from an already-open Rasterio dataset."""
+    from rasterio.windows import from_bounds
+
+    half = scale_m / 2.0
+    window = from_bounds(
+        centre_x - half,
+        centre_y - half,
+        centre_x + half,
+        centre_y + half,
+        transform=dataset.transform,
+    )
+    array = dataset.read(
+        1,
+        window=window,
+        boundless=True,
+        fill_value=np.nan,
+        out_shape=(max(64, PATCH_PIXELS * 2), max(64, PATCH_PIXELS * 2)),
+        resampling=__import__("rasterio").enums.Resampling.bilinear,
+    ).astype("float32")
+    return descriptor_from_array(
+        array,
+        dataset.res[0],
+        dataset.res[1],
+        rotation_deg=rotation_deg,
+    )
+
+
 def patch_from_raster(
     raster_path: Path,
     centre_x: float,
@@ -131,30 +202,10 @@ def patch_from_raster(
     rotation_deg: float = 0.0,
 ) -> np.ndarray:
     import rasterio
-    from rasterio.windows import from_bounds
 
     with rasterio.open(raster_path) as dataset:
-        half = scale_m / 2.0
-        window = from_bounds(
-            centre_x - half,
-            centre_y - half,
-            centre_x + half,
-            centre_y + half,
-            transform=dataset.transform,
-        )
-        array = dataset.read(
-            1,
-            window=window,
-            boundless=True,
-            fill_value=np.nan,
-            out_shape=(max(64, PATCH_PIXELS * 2), max(64, PATCH_PIXELS * 2)),
-            resampling=rasterio.enums.Resampling.bilinear,
-        ).astype("float32")
-        return descriptor_from_array(
-            array,
-            dataset.res[0],
-            dataset.res[1],
-            rotation_deg=rotation_deg,
+        return descriptor_from_dataset(
+            dataset, centre_x, centre_y, scale_m, rotation_deg=rotation_deg
         )
 
 

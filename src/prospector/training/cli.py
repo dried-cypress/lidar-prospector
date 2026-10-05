@@ -11,6 +11,7 @@ from prospector.providers.lidar import LidarProvider
 from prospector.training.db import connect, ensure_schema, register_model, register_training_manifest
 from prospector.training.model import train_model
 from prospector.training.pipeline import build_dataset, ingest_he_grid, _grid
+from prospector.training.features import FEATURE_VERSION
 
 training_app = typer.Typer(
     name="train",
@@ -94,7 +95,7 @@ def train_build_dataset(
     tile_size: float = typer.Option(1000.0, "--tile-size", min=100.0),
     max_tiles: int | None = typer.Option(None, "--max-tiles", min=1),
     max_features: int | None = typer.Option(None, "--max-features", min=1),
-    negative_multiplier: int = typer.Option(2, "--negative-multiplier", min=1, max=10),
+    negative_multiplier: int = typer.Option(6, "--negative-multiplier", min=1, max=10),
     project: Path = typer.Option(Path("./project"), "--project", "-p"),
     database_url: str | None = typer.Option(None, "--database-url", envvar="PROSPECTOR_DATABASE_URL", show_default=False),
 ) -> None:
@@ -175,7 +176,7 @@ def train_fit(
         model_path=str(result.model_path),
         dataset_path=str(dataset),
         metrics=result.metrics,
-        feature_schema={"version": "patch-v1", "dimensions": 3 * 32 * 32 + 16 + 8},
+        feature_schema={"version": FEATURE_VERSION, "dimensions": result.feature_dimensions},
         database_url=_database_url(database_url),
     )
     console.print(f"[green]Model trained:[/green] {result.version}")

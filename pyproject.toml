@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prospector"
-version = "0.5.2"
+version = "0.5.3"
 description = "Reproducible archaeological landscape prospection from LiDAR and contextual evidence."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,7 +16,7 @@ dependencies = [
   "requests>=2.32,<3",
   "pyproj>=3.7,<4",
   "shapely>=2.1,<3",
-  "scikit-learn>=1.7,<2",
+  "scikit-learn==1.7.2",
 ]
 
 [project.optional-dependencies]

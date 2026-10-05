@@ -20,7 +20,7 @@ CLI
  |      +--> OpenStreetMap supplement
  |
  +--> satellite provider
- |      +--> Sentinel-2 spectral-context STAC discovery
+ |      +--> High-resolution OpenAerialMap visual imagery
  |      +--> multi-scene NDVI support
  |
  +--> contextual ranker

@@ -400,6 +400,7 @@ def _layered_map(
     *,
     bases: list[tuple[str, str, Path | None]],
     he_svg: str,
+    project_svg: str,
     candidate_svg: str,
     width: int,
     height: int,
@@ -431,14 +432,15 @@ def _layered_map(
     <summary><span class="menu-glyph">☰</span> Layers &amp; base imagery</summary>
     <div class="layer-control-body">
       <div class="control-group"><strong>Base</strong>{"".join(buttons)}</div>
-      <div class="control-group"><strong>Overlays</strong><label><input type="checkbox" data-toggle-overlay="he" checked> Historic England</label>
+      <div class="control-group"><strong>Overlays</strong><label><input type="checkbox" data-toggle-overlay="he" checked> Historic England features</label>
+      <label><input type="checkbox" data-toggle-overlay="project" > HE project boundaries</label>
       <label><input type="checkbox" data-toggle-overlay="candidates" checked> Anomaly candidates</label></div>
     </div>
   </details>
   <div class="layer-canvas" style="aspect-ratio:{width}/{height}">
     {"".join(images)}
     <svg class="layer-svg" style="{svg_style}" viewBox="0 0 {viewport_width} {viewport_height}" preserveAspectRatio="none" aria-hidden="true">
-      <g data-overlay="he">{he_svg}</g><g data-overlay="candidates">{candidate_svg}</g>
+      <g data-overlay="he">{he_svg}</g><g data-overlay="project" style="display:none">{project_svg}</g><g data-overlay="candidates">{candidate_svg}</g>
     </svg>
   </div>
 </div>
@@ -581,7 +583,7 @@ def write_html_report(
             if context_type not in context_types:
                 context_types.append(context_type)
     modern_count = int(modern_summary.get("modern_feature_count", 0) or 0)
-    satellite_meta = modern_summary.get("satellite") or (anomaly_metadata or {}).get("satellite_context", {}) or {}
+    imagery_meta = modern_summary.get("high_resolution_imagery") or {}
     diagnostic_rasters = (anomaly_metadata or {}).get("diagnostic_rasters", {}) or {}
     diagnostic_links = "".join(
         f'<li>{_escape(label.replace("_", " ").title())}: {_relative_link(destination, Path(path))}</li>'
@@ -626,8 +628,9 @@ def write_html_report(
         _, map_width, map_height = _image_data(map_reference)
         viewport = _map_viewport(map_width, map_height, map_bounds)
         _, _, _, _, viewport_width, viewport_height = viewport
-        he_visual_features = project_areas + monument_extents + aim_features
+        he_visual_features = monument_extents + aim_features
         he_svg = _feature_svg(he_visual_features, map_bounds, viewport_width, viewport_height)
+        project_svg = _feature_svg(project_areas, map_bounds, viewport_width, viewport_height)
         candidate_svg = _candidate_svg(candidates, map_bounds, viewport_width, viewport_height)
         interactive_map_html = _layered_map(
             destination,
@@ -637,6 +640,7 @@ def write_html_report(
                 ("imagery", "High-resolution imagery", high_resolution_imagery_path),
             ],
             he_svg=he_svg,
+            project_svg=project_svg,
             candidate_svg=candidate_svg,
             width=map_width,
             height=map_height,
@@ -827,18 +831,18 @@ a {{ color:var(--accent); }}
 
 <section><h2>Modern feature context</h2><p class="note">Modern mapping is a penalty/context source, not the discovery engine. Roads and buildings are strongly down-ranked; boundaries and tracks are treated more softly.</p><p>Combined modern-context GeoJSON: {_relative_link(destination, modern_context_path)}</p><p>Modernity score raster: {_relative_link(destination, modern_context_raster_path)}</p></section>
 
-{he_validation_html}<section><h2>Satellite / aerial context</h2><p class="note">The visual base layer uses high-resolution Esri World Imagery. Sentinel-2 remains available only as optional spectral context for detector scoring; it is not shown as a visual base.</p>{satellite_html}<table><tr><th>Visual imagery</th><td>{_relative_link(destination, high_resolution_imagery_path)}</td></tr><tr><th>Sentinel-2 selected scenes</th><td>{_escape(satellite_meta.get("scene_count", 0))}</td></tr><tr><th>Sentinel-2 support raster</th><td>{_relative_link(destination, satellite_support_path)}</td></tr><tr><th>Sentinel-2 STAC search</th><td>{_relative_link(destination, satellite_search_path)}</td></tr></table></section>
+{he_validation_html}<section><h2>Aerial imagery context</h2><p class="note">The optional high-resolution base uses OpenAerialMap imagery. Where coverage exists, the imagery is aligned to the exact LiDAR raster grid before rendering.</p>{satellite_html}<table><tr><th>Visual imagery</th><td>{_relative_link(destination, high_resolution_imagery_path)}</td></tr><tr><th>Provider</th><td>{_escape(imagery_meta.get("provider", "OpenAerialMap"))}</td></tr><tr><th>Resolution</th><td>{_escape(imagery_meta.get("actual_tile_resolution_m", "—"))}</td></tr></table></section>
 
 <section><h2>Combined terrain anomalies + Historic England mapping</h2><p class="note">Review image with anomaly labels and Historic England context rendered on the same LiDAR grid.</p>{combined_map_html}</section>
 
 <section><h2>Historic England Aerial Archaeology Mapping records</h2><p>{len(project_areas)} project area(s), {len(monument_extents)} monument extent(s), and {len(aim_features)} detailed mapped feature geometries.</p><p class="note">Monument extents represent the general recorded monument envelope; detailed mapping represents mapped individual features.</p><table><tr><th>#</th><th>Historic England record</th><th>Type</th><th>Period</th><th>Evidence</th><th>Primary source</th><th>Features</th><th>Details</th></tr>{_aim_record_rows(aim_features)}</table></section>
 
-<section><h2>Run artefacts</h2><p>DTM: {_relative_link(destination, dtm_path)}</p><p>Hillshade: {_relative_link(destination, hillshade_path)}</p><p>AIM GeoJSON: {_relative_link(destination, aim_geojson_path)}</p><p>Candidate GeoJSON: {_relative_link(destination, candidate_geojson_path)}</p><p>LiDAR base: {_relative_link(destination, lidar_base_path)}</p><p>LiDAR anomaly base: {_relative_link(destination, anomaly_base_path)}</p><p>High-resolution imagery base: {_relative_link(destination, high_resolution_imagery_path)}</p><p>AIM visualisation: {_relative_link(destination, overlay_path)}</p><p>Anomaly visualisation: {_relative_link(destination, anomaly_overlay_path)}</p><p>Combined visualisation: {_relative_link(destination, anomaly_aim_overlay_path)}</p></section>
+<section><h2>Run artefacts</h2><p>DTM: {_relative_link(destination, dtm_path)}</p><p>Hillshade: {_relative_link(destination, hillshade_path)}</p><p>AIM GeoJSON: {_relative_link(destination, aim_geojson_path)}</p><p>Candidate GeoJSON: {_relative_link(destination, candidate_geojson_path)}</p><p>LiDAR base: {_relative_link(destination, lidar_base_path)}</p><p>LiDAR anomaly base: {_relative_link(destination, anomaly_base_path)}</p><p>High-resolution aerial imagery base: {_relative_link(destination, high_resolution_imagery_path)}</p><p>AIM visualisation: {_relative_link(destination, overlay_path)}</p><p>Anomaly visualisation: {_relative_link(destination, anomaly_overlay_path)}</p><p>Combined visualisation: {_relative_link(destination, anomaly_aim_overlay_path)}</p></section>
 
 <section><h2>Provenance</h2><p>{cache_hits} cache hit(s), {downloads} download(s).</p><table><tr><th>Status</th><th>URL</th><th>SHA-256</th><th>Bytes</th></tr>{''.join(f'<tr><td>{_escape("HIT" if e.get("cache_hit") else "DOWNLOAD")}</td><td>{_escape(e.get("url", ""))}</td><td><code>{_escape(e.get("sha256", ""))}</code></td><td>{_escape(e.get("size_bytes", ""))}</td></tr>' for e in cache_entries)}</table></section>
 <section><h2>Acquisition status</h2>{error_html}</section>
 <section><h2>Location attribution</h2><p>{_escape(location_attribution or "No reverse-geocoder attribution supplied.")}</p></section>
-{layer_script}<footer>Prospector {_escape(application_version)}. LiDAR elevation supplied by the Environment Agency component used by the NLS Maps 50cm–1m composite; archaeology from Historic England Aerial Investigation and Mapping; modern context from Ordnance Survey/OpenStreetMap; visual imagery from Esri World Imagery; optional spectral context from Sentinel-2 via Microsoft Planetary Computer.</footer>
+{layer_script}<footer>Prospector {_escape(application_version)}. LiDAR elevation supplied by the Environment Agency component used by the NLS Maps 50cm–1m composite; archaeology from Historic England Aerial Investigation and Mapping; modern context from Ordnance Survey/OpenStreetMap; visual imagery from OpenAerialMap.</footer>
 </main></body></html>"""
     destination.write_text(document, encoding="utf-8")
     return destination

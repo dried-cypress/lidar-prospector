@@ -66,6 +66,7 @@ def test_train_model_creates_versioned_and_current_model(tmp_path: Path) -> None
     np.savez_compressed(dataset, X=x, y=y, groups=groups)
 
     result = train_model(dataset, tmp_path / "models")
+    assert result.feature_dimensions == 16
     assert result.model_path.is_file()
     assert result.metadata_path.is_file()
     assert (tmp_path / "models" / "current.joblib").is_file()

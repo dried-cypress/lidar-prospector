@@ -36,13 +36,13 @@ OpenStreetMap is used only as supplementary modern context. Prospector queries t
 
 OSM data should be treated under its upstream ODbL terms and is not redistributed by Prospector as a new licensed dataset.
 
-## Sentinel-2
+## Legacy Sentinel-2 provider
 
 Prospector uses the Microsoft Planetary Computer public STAC catalogue for Sentinel-2 Level-2A imagery:
 
 `https://planetarycomputer.microsoft.com/api/stac/v1/search`
 
-Selected assets use short-lived signed URLs. Sentinel-2 is optional spectral evidence only; it is not used as the interactive report base image. The high-resolution visual base is provided separately by Esri World Imagery. Satellite data are contextual evidence and are never presented as proof of archaeology.
+Selected assets use short-lived signed URLs. Sentinel-2 is optional spectral evidence only; it is not used as the interactive report base image. The high-resolution visual base is provided separately by OpenAerialMap. Satellite data are contextual evidence and are never presented as proof of archaeology.
 
 ## LiDAR terrain anomaly detector
 
@@ -61,9 +61,9 @@ The result is a deterministic contextual ranker. Candidates remain research lead
 
 ## High-resolution visual imagery
 
-Prospector downloads an AOI-aligned visual image from Esri World Imagery using the ArcGIS World Imagery map service export endpoint. World Imagery is a compilation of satellite and aerial imagery; available resolution varies by source and location, with high-resolution sources used in many areas.
+Prospector downloads OpenAerialMap XYZ tiles for the optional high-resolution visual base, mosaics them in Web Mercator, and reprojects the result onto the exact LiDAR grid. The Environment Agency also publishes Vertical Aerial Photography at 10cm–50cm in EPSG:27700; this remains documented as a future/alternative UK imagery source because its distribution is survey-download based rather than a stable tile API.
 
-The visual image is presentation/context data only. It is not used as the primary archaeology detector input; the detector works from the numeric LiDAR DTM. The report records Esri attribution alongside the imagery.
+The visual image is presentation/context data only. It is not used as the primary archaeology detector input; the detector works from the numeric LiDAR DTM. The report records OpenAerialMap attribution alongside the imagery.
 
 
 ## V0.5 local training corpus
@@ -71,3 +71,7 @@ The visual image is presentation/context data only. It is not used as the primar
 V0.5 can ingest the three current public HE AIM layers in bounded EPSG:27700 chunks: `Detailed_Mapping`, `Monument_Extents` and `Project_Area`. All three are stored in PostGIS. `Detailed_Mapping` supplies positive archaeological examples; the other layers remain contextual and are used when constructing background masks.
 
 For each positive feature, Prospector extracts the corresponding numeric LiDAR terrain directly from the DTM and creates examples at several physical scales with rotation augmentation. The model therefore learns terrain morphology rather than RGB appearance, and training/validation groups keep variants of the same source feature together.
+
+## Visual aerial imagery
+
+Prospector uses OpenAerialMap XYZ tiles for optional high-resolution visual inspection. The tiles are mosaicked in Web Mercator and reprojected to the exact LiDAR grid before rendering. Imagery is presentation-only and is never used as detector input. The Environment Agency also publishes Vertical Aerial Photography at 10cm–50cm in EPSG:27700 for UK imagery acquisition outside the automatic tile path.

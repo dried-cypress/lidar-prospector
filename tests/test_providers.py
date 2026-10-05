@@ -358,24 +358,22 @@ def test_satellite_acquisition_does_not_request_visual_preview(monkeypatch, tmp_
 
 
 def test_high_resolution_world_imagery_is_snapped_to_dtm_grid(tmp_path: Path) -> None:
+    import numpy as np
     import rasterio
     from PIL import Image
     from rasterio.transform import from_origin
 
     from prospector.providers.http import CachedResponse
-    from prospector.providers.imagery import HighResolutionImageryProvider, WORLD_IMAGERY_EXPORT_URL
+    from prospector.providers.imagery import HighResolutionImageryProvider, OAM_GLOBAL_MOSAIC_URL
 
     class FakeClient:
         def cached_bytes(self, key, url, params, *, suffix, validator):
-            assert key == "world-imagery-export-v044"
-            assert url == WORLD_IMAGERY_EXPORT_URL
-            assert params["bboxSR"] == "27700"
-            assert params["imageSR"] == "27700"
-            assert params["format"] == "png32"
-            assert params["adjustAspectRatio"] == "false"
-            cache = tmp_path / "image.png"
-            from PIL import Image
-            Image.new("RGB", (4, 4), (120, 160, 80)).save(cache, format="PNG")
+            assert key == "open-aerial-map-tile"
+            assert url == OAM_GLOBAL_MOSAIC_URL.format(
+                z=params["z"], x=params["x"], y=params["y"]
+            )
+            cache = tmp_path / f"tile-{params['x']}-{params['y']}.png"
+            Image.new("RGB", (256, 256), (120, 160, 80)).save(cache, format="PNG")
             return CachedResponse(cache, False, "0" * 64)
 
     dtm = tmp_path / "dtm.tif"
@@ -384,9 +382,9 @@ def test_high_resolution_world_imagery_is_snapped_to_dtm_grid(tmp_path: Path) ->
         dtm, "w", driver="GTiff", width=100, height=80, count=1, dtype="float32",
         crs="EPSG:27700", transform=transform, nodata=-9999,
     ) as destination:
-        destination.write(__import__("numpy").zeros((80, 100), dtype="float32"), 1)
+        destination.write(np.zeros((80, 100), dtype="float32"), 1)
 
-    result = HighResolutionImageryProvider(FakeClient()).acquire(
+    result = HighResolutionImageryProvider(FakeClient(), zoom=17, workers=2).acquire(
         (500000, 100000, 501000, 100800),
         tmp_path / "run",
         reference_raster=dtm,
@@ -403,4 +401,11 @@ def test_high_resolution_world_imagery_is_snapped_to_dtm_grid(tmp_path: Path) ->
         assert aligned.count == 3
     with Image.open(result.preview_path) as image:
         assert image.size == (1800, 1350)
+
+
+def test_high_resolution_imagery_uses_openaerialmap_not_arcgis() -> None:
+    from prospector.providers.imagery import OAM_GLOBAL_MOSAIC_URL
+
+    assert "global.imagery.hotosm.org" in OAM_GLOBAL_MOSAIC_URL
+    assert "services.arcgisonline.com" not in OAM_GLOBAL_MOSAIC_URL
 

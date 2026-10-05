@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from prospector.training.features import FEATURE_VERSION
+
 MODEL_NAME = "prospector-archaeology"
 MODEL_VERSION_PREFIX = "0.5"
 
@@ -18,6 +20,7 @@ class TrainingResult:
     metadata_path: Path
     version: str
     metrics: dict[str, float]
+    feature_dimensions: int
 
 
 def train_model(
@@ -27,6 +30,7 @@ def train_model(
     random_state: int = 20261005,
 ) -> TrainingResult:
     import joblib
+    import sklearn
     from sklearn.ensemble import ExtraTreesClassifier
     from sklearn.metrics import (
         accuracy_score,
@@ -73,6 +77,22 @@ def train_model(
     ])
     pipeline.fit(x[train_idx], y[train_idx])
 
+    # Persist learned positive/background prototypes in the same PCA space.
+    # This turns the model into an explicit similarity learner as well as a
+    # tree classifier: an unknown patch can be compared with the learned
+    # archaeological and background populations.
+    scaler = pipeline.named_steps["scale"]
+    pca = pipeline.named_steps["pca"]
+    transformed_train = pca.transform(scaler.transform(x[train_idx])).astype("float32")
+    positive_train = transformed_train[y[train_idx] == 1]
+    negative_train = transformed_train[y[train_idx] == 0]
+    if positive_train.size == 0 or negative_train.size == 0:
+        raise ValueError("Training split must contain both archaeology and background examples")
+    positive_prototype = np.mean(positive_train, axis=0).astype("float32")
+    negative_prototype = np.mean(negative_train, axis=0).astype("float32")
+    positive_prototype /= max(float(np.linalg.norm(positive_prototype)), 1e-8)
+    negative_prototype /= max(float(np.linalg.norm(negative_prototype)), 1e-8)
+
     metrics: dict[str, float] = {
         "training_examples": float(len(train_idx)),
         "testing_examples": float(len(test_idx)),
@@ -99,7 +119,9 @@ def train_model(
         "model_name": MODEL_NAME,
         "version": version,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "feature_version": "patch-v1",
+        "feature_version": FEATURE_VERSION,
+        "sklearn_version": sklearn.__version__,
+        "prototype_version": "pca-centroid-v1",
         "model": "StandardScaler + PCA + ExtraTreesClassifier",
         "training_dataset": str(dataset_path),
         "random_state": random_state,
@@ -107,6 +129,8 @@ def train_model(
         "multi_scale": True,
         "metrics": metrics,
         "classes": {"0": "background", "1": "archaeology"},
+        "positive_prototype": positive_prototype.astype("float32").tolist(),
+        "negative_prototype": negative_prototype.astype("float32").tolist(),
     }
     joblib.dump(pipeline, model_path, compress=3)
     metadata_path.write_text(json.dumps(payload_meta, indent=2, sort_keys=True), encoding="utf-8")
@@ -114,11 +138,12 @@ def train_model(
     current_meta = model_dir / "current.json"
     joblib.dump(pipeline, current, compress=3)
     current_meta.write_text(json.dumps(payload_meta, indent=2, sort_keys=True), encoding="utf-8")
-    return TrainingResult(model_path, metadata_path, version, metrics)
+    return TrainingResult(model_path, metadata_path, version, metrics, int(x.shape[1]))
 
 
 def load_model(model_path: Path) -> tuple[Any, dict[str, Any]]:
     import joblib
+    import sklearn
     path = model_path
     metadata_path = path.with_suffix(".json")
     if path.name == "current.joblib":
