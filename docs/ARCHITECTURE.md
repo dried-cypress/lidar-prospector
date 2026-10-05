@@ -69,3 +69,30 @@ Historic England AIM `Detailed_Mapping` remains the known-archaeology reference.
 ## V2 boundary
 
 A future learned model can consume V0.3.5 candidate outputs, human decisions and source provenance as training material. The current implementation deliberately avoids introducing PostGIS, pgvector, MLflow or a persistent training database until the deterministic feature/ranking layer has demonstrated useful behaviour.
+
+## V0.5 local training architecture
+
+```text
+Historic England AIM ──┐
+                       ├──► PostGIS catalogue ──► LiDAR training tiles
+Other labelled sources ─┘                         │
+                                                   ▼
+                                      scale/rotation augmented patches
+                                                   │
+                                                   ▼
+                                      grouped train/validation split
+                                                   │
+                                                   ▼
+                                  StandardScaler + PCA + ExtraTrees
+                                                   │
+                                                   ▼
+                                      versioned model + registry
+                                                   │
+                                                   ▼
+                                   Prospector candidate inference
+                                                   │
+                                                   ▼
+                                         existing HTML report
+```
+
+The training corpus keeps positive archaeology and background terrain distinct. Detailed Mapping provides positives; Monument Extents and Project Areas are ingested as contextual catalogue layers rather than blindly treated as positive shape labels. Augmented examples are grouped by source feature for validation, preventing rotations or scale variants of one monument from leaking into the hold-out set.

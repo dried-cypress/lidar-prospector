@@ -34,6 +34,7 @@ class TerrainCandidate:
     ring_score: float = 0.0
     ridge_valley_score: float = 0.0
     texture_score: float = 0.0
+    trained_model_score: float = 0.0
     he_match_type: str = ""
     he_match_uid: str = ""
 
@@ -1143,6 +1144,7 @@ def detect_terrain_anomalies(
     max_candidates: int | None = None,
     diagnostic_raster_dir: Path | None = None,
     exclude_historic_england: bool = True,
+    trained_model_path: Path | None = None,
 ) -> tuple[list[TerrainCandidate], dict[str, Any]]:
     """Discover, evaluate against known archaeology, then rank unknown terrain candidates."""
     import rasterio
@@ -1630,15 +1632,31 @@ def detect_terrain_anomalies(
             ring_score=item.ring_score,
             ridge_valley_score=item.ridge_valley_score,
             texture_score=item.texture_score,
+            trained_model_score=item.trained_model_score,
             he_match_type=item.he_match_type,
             he_match_uid=item.he_match_uid,
         )
         for index, item in enumerate(retained, 1)
     ]
 
+    trained_model_metadata: dict[str, Any] = {"enabled": False}
+    if trained_model_path is not None and trained_model_path.is_file() and retained:
+        try:
+            from prospector.training.inference import score_candidates
+            retained, trained_model_metadata = score_candidates(trained_model_path, dtm_path, retained)
+            retained = [
+                __import__("dataclasses", fromlist=["replace"]).replace(
+                    item,
+                    classification="high-priority" if item.score >= (74.0 - profile.level * 0.8) else "candidate",
+                )
+                for item in retained
+            ]
+        except Exception as exc:
+            trained_model_metadata = {"enabled": False, "error": str(exc), "model_path": str(trained_model_path)}
+
     metadata = {
         "name": "hybrid-terrain-pattern-detector",
-        "version": "0.4.4",
+        "version": "0.5.0",
         "sensitivity": profile.level,
         "sensitivity_description": "1=very conservative, 5=balanced research setting with HE recall validation, 10=maximum exploratory recall",
         "workers_requested": workers,
@@ -1654,6 +1672,7 @@ def detect_terrain_anomalies(
             "model": novelty_metadata.get("model", "IsolationForest"),
             "terrain_novelty": novelty_metadata,
             "he_trained_archaeology": archaeology_model_metadata,
+            "persisted_archaeology_model": trained_model_metadata,
         },
         "threshold_percentile": profile.threshold_percentile,
         "seed_percentile": profile.seed_percentile,

@@ -272,3 +272,77 @@ V0.4.4 is deliberately a hybrid discovery system rather than an opaque model. Ea
 ### Fast OS context
 
 See **OS Data Hub API signup** above for the account, API project and environment-variable setup. `OS_DATAHUB_API_KEY` is the preferred variable; `OS_API_KEY` remains a legacy fallback.
+
+## V0.5 training stack
+
+V0.5 introduces an optional local learning stack for building an archaeological training corpus from Historic England AIM and LiDAR.
+
+The stack is intentionally separate from the lightweight coordinate-driven analysis path. The existing analysis command continues to work without a training database or trained model. When `project/models/current.joblib` exists, `analyse` automatically uses it to add a persisted archaeology-model score to candidates.
+
+The training stack uses:
+
+- PostgreSQL + PostGIS for the spatial archaeology catalogue and model registry.
+- Historic England AIM ingestion in bounded EPSG:27700 chunks. The current public service exposes `Detailed_Mapping`, `Monument_Extents` and `Project_Area`; all three are ingested, while `Detailed_Mapping` supplies positive archaeology examples.
+- NLS/Environment Agency DTM tiles for LiDAR training data. Each known feature is represented at multiple physical scales and rotation augmentations so the model is not tied to one orientation or a single monument size.
+- A grouped hold-out evaluation split so rotated/augmented copies of one monument cannot leak into both training and validation.
+- A local `StandardScaler -> PCA -> ExtraTreesClassifier` model stored under `project/models/`, with a `current.joblib` pointer and JSON metadata.
+
+Historic England's Aerial Investigation Mapping data is available as spatial download data and is updated periodically; the current [Historic England data-download page](https://historicengland.org.uk/listing/the-list/data-downloads) records the AIM dataset as last updated 25 June 2026. The public [HE AIM ArcGIS service](https://services-eu1.arcgis.com/ZOdPfBS3aqqDYPUQ/ArcGIS/rest/services/HE_AIM_data/FeatureServer) exposes the service used by Prospector. 
+
+### Start the training stack
+
+Create a local `.env` from the example and start PostGIS:
+
+```bash
+cp .env.example .env
+docker compose up -d db
+```
+
+Compose waits for the PostGIS health check before starting the dependent application/trainer services. citeturn555997search0
+
+Then initialise the schema:
+
+```bash
+docker compose run --rm trainer prospector train init
+```
+
+Ingest HE in chunks. For example, the 25000 m chunking below is deliberately bounded so the national corpus can be built incrementally:
+
+```bash
+docker compose run --rm trainer prospector train ingest-he \
+  --xmin 450000 --ymin 50000 --xmax 550000 --ymax 150000 \
+  --tile-size 25000
+```
+
+Build LiDAR-backed training examples. `--download-lidar` uses the same NLS/Environment Agency WCS provider as ordinary Prospector analysis, and the downloaded DTM chunks are cached under `project/training/lidar/`:
+
+```bash
+docker compose run --rm trainer prospector train build-dataset \
+  --download-lidar \
+  --xmin 450000 --ymin 50000 --xmax 550000 --ymax 150000 \
+  --tile-size 1000
+```
+
+For iterative development, limit the number of tiles or features first:
+
+```bash
+docker compose run --rm trainer prospector train build-dataset \
+  --download-lidar \
+  --xmin 520000 --ymin 105000 --xmax 525000 --ymax 110000 \
+  --tile-size 1000 --max-tiles 25 --max-features 100
+```
+
+Fit and register a model:
+
+```bash
+docker compose run --rm trainer prospector train fit \
+  --dataset project/training/datasets/<dataset>/training-dataset.npz
+```
+
+Inspect the corpus and model registry:
+
+```bash
+docker compose run --rm trainer prospector train status
+```
+
+The model is deliberately treated as a research classifier, not proof of an archaeological identification. The next learning phase should add manually reviewed hard negatives, held-out geographic regions, and more complete monument-type labels before a V1.0 claim of broad accuracy.

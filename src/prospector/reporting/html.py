@@ -379,7 +379,8 @@ def _candidate_svg(
         tooltip = (
             f"Candidate {index} — {candidate.classification}; "
             f"score {candidate.score:.1f}; {candidate.polarity}; "
-            f"{candidate.relief_m:.2f} m relief; {candidate.area_m2:.1f} m²"
+            f"{candidate.relief_m:.2f} m relief; {candidate.area_m2:.1f} m²; "
+            f"trained model {getattr(candidate, 'trained_model_score', 0.0):.1f}%"
         )
         elements.append(
             f'<g id="map-candidate-{index}" data-map-candidate="{index}" class="candidate-marker">'
@@ -565,7 +566,7 @@ def write_html_report(
         f'<td>{c.score:.1f}</td><td>{c.lidar_score:.1f}</td><td>{c.persistence_score:.1f}</td>'
         f'<td>{c.morphology_score:.1f}</td><td>{c.linear_score:.1f}</td><td>{c.ring_score:.1f}</td>'
         f'<td>{c.ridge_valley_score:.1f}</td><td>{c.terrain_novelty_score:.1f}</td><td>{c.texture_score:.1f}</td><td>{c.archaeology_likelihood_score:.1f}</td>'
-        f'<td>{c.modern_penalty:.1f}</td><td>{c.satellite_support:.1f}</td><td>{c.he_similarity:.1f}</td>'
+        f'<td>{c.modern_penalty:.1f}</td><td>{c.satellite_support:.1f}</td><td>{c.he_similarity:.1f}</td><td>{getattr(c, "trained_model_score", 0.0):.1f}</td>'
         f'<td>{c.relief_m:.2f} m</td><td>{c.strongest_scale_m:g} m</td><td>{c.area_m2:,.1f} m²</td>'
         f'<td>{_escape(c.he_match_type or "—")}</td><td>{_escape(c.he_match_uid or "—")}</td><td>{_escape("; ".join(c.reasons) or "—")}</td></tr>'
         for i, c in enumerate(candidates, 1)
@@ -822,7 +823,7 @@ a {{ color:var(--accent); }}
 
 <section><h2>Interactive evidence map</h2><p class="note">Switch base imagery while keeping the Historic England and Prospector anomaly overlays aligned to the same map grid.</p>{interactive_map_html}</section>
 
-<section id="anomaly-section"><h2>Terrain anomaly scan</h2><p class="note">Hybrid discovery combines multi-scale local relief, persistence, linear/Hough structure, ring/annular response, ridge/valley morphology, local texture/coherence, unsupervised terrain novelty and an HE-trained terrain-likelihood model learned from known Historic England features. Known features are detected first for recall validation, then removed from the final unknown-candidate set.</p><div class="metric-row"><div class="metric"><small>Sensitivity</small><strong>{_escape(sensitivity_name)}</strong></div><div class="metric"><small>Detector</small><strong>Hybrid + HE-trained ML + unsupervised ML</strong></div><div class="metric"><small>Detector workers</small><strong>{_escape(detector_workers_label)}</strong></div><div class="metric"><small>Retained candidates</small><strong>{len(candidates)}</strong></div><div class="metric"><small>HE detailed features</small><strong>{len(aim_features)}</strong></div></div>{anomaly_map_html}<table><thead><tr><th>#</th><th>Map</th><th>Class</th><th>Final</th><th>LiDAR</th><th>Persistence</th><th>Morphology</th><th>Linear</th><th>Ring</th><th>Ridge/valley</th><th>Novelty</th><th>Texture</th><th>HE terrain likelihood</th><th>Modern</th><th>Satellite</th><th>HE similarity</th><th>Relief</th><th>Scale</th><th>Area</th><th>HE match type</th><th>HE match UID</th><th>Why retained</th></tr></thead><tbody>{candidate_rows}</tbody></table>{diagnostic_html}<details><summary>Detector parameters and provenance</summary><pre>{metadata_json}</pre></details></section>
+<section id="anomaly-section"><h2>Terrain anomaly scan</h2><p class="note">Hybrid discovery combines multi-scale local relief, persistence, linear/Hough structure, ring/annular response, ridge/valley morphology, local texture/coherence, unsupervised terrain novelty and an HE-trained terrain-likelihood model learned from known Historic England features. Known features are detected first for recall validation, then removed from the final unknown-candidate set.</p><div class="metric-row"><div class="metric"><small>Sensitivity</small><strong>{_escape(sensitivity_name)}</strong></div><div class="metric"><small>Detector</small><strong>Hybrid + HE-trained ML + unsupervised ML</strong></div><div class="metric"><small>Detector workers</small><strong>{_escape(detector_workers_label)}</strong></div><div class="metric"><small>Retained candidates</small><strong>{len(candidates)}</strong></div><div class="metric"><small>HE detailed features</small><strong>{len(aim_features)}</strong></div></div>{anomaly_map_html}<table><thead><tr><th>#</th><th>Map</th><th>Class</th><th>Final</th><th>LiDAR</th><th>Persistence</th><th>Morphology</th><th>Linear</th><th>Ring</th><th>Ridge/valley</th><th>Novelty</th><th>Texture</th><th>HE terrain likelihood</th><th>Modern</th><th>Satellite</th><th>HE similarity</th><th>Trained model</th><th>Relief</th><th>Scale</th><th>Area</th><th>HE match type</th><th>HE match UID</th><th>Why retained</th></tr></thead><tbody>{candidate_rows}</tbody></table>{diagnostic_html}<details><summary>Detector parameters and provenance</summary><pre>{metadata_json}</pre></details></section>
 
 <section><h2>Modern feature context</h2><p class="note">Modern mapping is a penalty/context source, not the discovery engine. Roads and buildings are strongly down-ranked; boundaries and tracks are treated more softly.</p><p>Combined modern-context GeoJSON: {_relative_link(destination, modern_context_path)}</p><p>Modernity score raster: {_relative_link(destination, modern_context_raster_path)}</p></section>
 

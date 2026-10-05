@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-prospector}
+      POSTGRES_USER: ${POSTGRES_USER:-prospector}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - prospector-db:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/001-prospector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  app:
+    build:
+      context: .
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+    environment:
+      PROSPECTOR_DATABASE_URL: postgresql://${POSTGRES_USER:-prospector}:${POSTGRES_PASSWORD:-change-me}@db:5432/${POSTGRES_DB:-prospector}
+      OS_DATAHUB_API_KEY: ${OS_DATAHUB_API_KEY:-}
+      PC_SDK_SUBSCRIPTION_KEY: ${PC_SDK_SUBSCRIPTION_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/workspace
+
+  trainer:
+    build:
+      context: .
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+    environment:
+      PROSPECTOR_DATABASE_URL: postgresql://${POSTGRES_USER:-prospector}:${POSTGRES_PASSWORD:-change-me}@db:5432/${POSTGRES_DB:-prospector}
+      OS_DATAHUB_API_KEY: ${OS_DATAHUB_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/workspace
+
+volumes:
+  prospector-db:

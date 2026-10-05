@@ -42,7 +42,7 @@ Prospector uses the Microsoft Planetary Computer public STAC catalogue for Senti
 
 `https://planetarycomputer.microsoft.com/api/stac/v1/search`
 
-Selected assets use short-lived signed URLs. The detector currently uses B04/B08 for NDVI and B02/B03/B04 for the report preview. Satellite data are contextual evidence and are never presented as proof of archaeology.
+Selected assets use short-lived signed URLs. Sentinel-2 is optional spectral evidence only; it is not used as the interactive report base image. The high-resolution visual base is provided separately by Esri World Imagery. Satellite data are contextual evidence and are never presented as proof of archaeology.
 
 ## LiDAR terrain anomaly detector
 
@@ -64,3 +64,10 @@ The result is a deterministic contextual ranker. Candidates remain research lead
 Prospector downloads an AOI-aligned visual image from Esri World Imagery using the ArcGIS World Imagery map service export endpoint. World Imagery is a compilation of satellite and aerial imagery; available resolution varies by source and location, with high-resolution sources used in many areas.
 
 The visual image is presentation/context data only. It is not used as the primary archaeology detector input; the detector works from the numeric LiDAR DTM. The report records Esri attribution alongside the imagery.
+
+
+## V0.5 local training corpus
+
+V0.5 can ingest the three current public HE AIM layers in bounded EPSG:27700 chunks: `Detailed_Mapping`, `Monument_Extents` and `Project_Area`. All three are stored in PostGIS. `Detailed_Mapping` supplies positive archaeological examples; the other layers remain contextual and are used when constructing background masks.
+
+For each positive feature, Prospector extracts the corresponding numeric LiDAR terrain directly from the DTM and creates examples at several physical scales with rotation augmentation. The model therefore learns terrain morphology rather than RGB appearance, and training/validation groups keep variants of the same source feature together.

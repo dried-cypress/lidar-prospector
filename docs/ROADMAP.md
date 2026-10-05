@@ -1,27 +1,32 @@
 # Roadmap
 
-## V1.0 — current line
+## V0.5 — learning foundation
 
-- Improve candidate ranking using multiple LiDAR scales.
-- Add morphology-aware scoring.
-- Add OS and OpenStreetMap modern context.
-- Add satellite contextual evidence.
-- Preserve the proven LiDAR visualisation renderer.
-- Improve report explanations and candidate provenance.
-- Build a repeatable corpus of human-reviewed false positives and useful candidates.
+- Ingest large, spatially chunked Historic England AIM datasets.
+- Store source geometry and training provenance in PostGIS.
+- Build LiDAR patches directly from elevation rasters.
+- Make training examples robust to rotation and scale.
+- Train a persisted local archaeology/background classifier.
+- Score Prospector candidates with the persisted model when available.
+- Preserve the existing HTML report and visual LiDAR overlays.
 
-## V2.0 — planned learned system
+## V0.6 — archaeological object learning
 
-- ingest the full Historic England Aerial Investigation Mapping archive where licensing permits
-- introduce a persistent spatial database
-- create labelled positive archaeology and hard-negative modern/agricultural training sets
-- train a segmentation/candidate-generation model
-- train a multimodal candidate ranker
-- add embedding/vector similarity search
-- add active learning from human review
-- add blind spatial validation by held-out regions
-- integrate historic aerial photography as another evidence modality
+- Expand monument-type labels and type-specific models.
+- Add hard-negative mining from reviewed false positives.
+- Add coarse model-driven candidate generation, not just candidate ranking.
+- Add blind geographic validation across held-out projects/regions.
+- Add model comparison and promotion gates.
+- Add human review labels back into the training corpus.
 
-## Overlay alignment
+## V0.7+ — discovery system
 
-The generated PNG overlays are already the stable visualisation baseline. The HTML/SVG alignment bug is a separate issue and should be solved without changing the PNG renderer or detector inputs.
+- Train on substantially larger national coverage.
+- Add robust unknown-feature discovery and calibrated confidence.
+- Add learned similarity search against known monument populations.
+- Incorporate historical aerial imagery as a separate evidence modality.
+- Add landscape-level relational features between candidate objects.
+
+## V1.0 goal
+
+V1.0 should not be declared until Prospector can demonstrate reproducible held-out geographic validation, strong recovery of known archaeology, controlled false-positive rates, and useful discovery performance on features not present in the training labels.

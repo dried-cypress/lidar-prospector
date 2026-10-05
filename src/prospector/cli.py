@@ -33,6 +33,7 @@ from prospector.runs import create_run, sha256_file, update_run_metadata
 from prospector.terrain.anomalies import detect_terrain_anomalies
 from prospector.terrain.context import build_modern_context_raster
 from prospector.terrain.derivatives import hillshade
+from prospector.training.cli import training_app
 
 app = typer.Typer(
     name="prospector",
@@ -40,6 +41,8 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+app.add_typer(training_app, name="train")
 
 
 def _cache_manifest(client: HttpClient, entries: list[CachedResponse]) -> list[dict[str, Any]]:
@@ -546,6 +549,10 @@ def analyse(
             console.print("[bold]Context-aware LiDAR terrain anomaly scan[/bold]")
             console.print(f"  Detection sensitivity: {sensitivity}")
             console.print(f"  Detector workers: {workers if workers > 0 else 'auto'}")
+            trained_model_path = project / "models" / "current.joblib"
+            trained_model_path = trained_model_path if trained_model_path.is_file() else None
+            if trained_model_path is not None:
+                console.print(f"  Trained archaeology model: {trained_model_path}")
             candidates, anomaly_metadata = detect_terrain_anomalies(
                 dtm_output,
                 aim,
@@ -555,6 +562,7 @@ def analyse(
                 modern_features=modern_features,
                 modern_context_path=modern_context_path,
                 satellite_support_path=satellite_support_path,
+                trained_model_path=trained_model_path,
             )
             anomaly_metadata["external_context"] = {
                 **context_metadata,
@@ -706,7 +714,7 @@ def analyse(
             "classifier": {
                 "name": "HE-guided terrain-signature ranker",
                 "version": __version__,
-                "status": "deterministic morphology + unsupervised per-AOI ML novelty + HE reference signatures",
+                "status": "deterministic morphology + unsupervised terrain novelty + HE reference learning + optional persisted archaeology model",
             },
         },
         sources={

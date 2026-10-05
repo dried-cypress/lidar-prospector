@@ -1,0 +1,27 @@
+cp .env.example .env
+
+# Start stack
+docker compose up -d
+
+# Initialise training database
+docker compose run --rm trainer prospector train init
+
+# Ingest Historic Englang in mangeable chunks
+docker compose run --rm trainer prospector train ingest-he \
+  --xmin 518000 --ymin 104000 \
+  --xmax 528000 --ymax 114000
+
+# Build LiDAR0backed training example
+docker compose run --rm trainer prospector train build-dataset \
+  --xmin 518000 --ymin 104000 \
+  --xmax 528000 --ymax 114000 \
+  --tile-size 1000 \
+  --max-tiles 25 \
+  --max-features 100
+
+# 'Fit' the first model
+docker compose run --rm trainer prospector train fit \
+  --dataset project/training/datasets/<dataset>/training-dataset.npz
+
+# Inspect the corpus/model registry
+docker compose run --rm trainer prospector train status
